@@ -55,6 +55,17 @@ function LogoSplash({ onDone }) {
 
 // --- Components ---
 
+function renderBoldText(text) {
+    if (!text) return null;
+    const parts = text.split(/\*\*(.*?)\*\*/g);
+    return parts.map((part, index) => {
+        if (index % 2 === 1) {
+            return <strong key={index}>{part}</strong>;
+        }
+        return part;
+    });
+}
+
 function Navbar({ currentView, setCurrentView }) {
     return (
         <header className="navbar">
@@ -396,7 +407,7 @@ function CourseMap({ course, setCurrentView, setCurrentSegment, activeBuild }) {
                         Important Points to Remember
                     </h2>
                     <div style={{ color: '#065f46', lineHeight: '1.6', fontSize: '1.05rem', whiteSpace: 'pre-line' }}>
-                        {course.final_summary}
+                        {renderBoldText(course.final_summary)}
                     </div>
                 </div>
             )}
@@ -407,34 +418,50 @@ function CourseMap({ course, setCurrentView, setCurrentSegment, activeBuild }) {
 function SegmentViewer({ segment, courseIndex, setCurrentView, setCourses }) {
     const [activeTab, setActiveTab] = useState('video');
     const [unlockedTabs, setUnlockedTabs] = useState({ video: true, read: false, quiz: false });
-    const [quizAnswered, setQuizAnswered] = useState(false);
-    const [selectedOption, setSelectedOption] = useState(null);
-    const [attempts, setAttempts] = useState(0);
     const [isBuffering, setIsBuffering] = useState(false);
     const [bufferMsg, setBufferMsg] = useState('');
     const videoRef = React.useRef(null);
 
     // ── Quiz state ─────────────────────────────────────────────────────────
     const [quizIndex, setQuizIndex]       = useState(0);
-    const [answers, setAnswers]           = useState({});   // { qIndex: selectedOption }
+    const [answers, setAnswers]           = useState({});   // { qIndex: userSelection }
     const [showResult, setShowResult]     = useState(false);
     const [quizComplete, setQuizComplete] = useState(false);
+    const [draggedItem, setDraggedItem]   = useState(null); // For matching questions
 
-    // Normalise quiz data: support both new {questions:[...]} and legacy {question,...}
     const questions = React.useMemo(() => {
         const q = segment.quiz;
         if (!q) return [];
         if (Array.isArray(q.questions) && q.questions.length > 0) return q.questions;
         if (q.question && q.options && q.answer) {
-            return [{ question: q.question, options: q.options, answer: q.answer, difficulty: 'medium' }];
+            return [{ type: 'single_mcq', question: q.question, options: q.options, answer: q.answer, difficulty: 'medium' }];
         }
         return [];
     }, [segment.quiz]);
 
-    const currentQ  = questions[quizIndex];
+    const currentQ  = questions[quizIndex] || {};
+    const qType = currentQ.type || 'single_mcq';
     const totalQ    = questions.length;
-    const selected  = answers[quizIndex];
-    const isCorrect = selected === (currentQ && currentQ.answer);
+    
+    // Default selection structure based on type
+    let defaultSelected = null;
+    if (qType === 'multiple_mcq') defaultSelected = [];
+    if (qType === 'match_following') defaultSelected = {};
+    
+    const selected  = answers[quizIndex] || defaultSelected;
+
+    // Calculate if correct
+    let isCorrect = false;
+    if (showResult && currentQ) {
+        if (qType === 'single_mcq') {
+            isCorrect = selected === currentQ.answer;
+        } else if (qType === 'multiple_mcq') {
+            isCorrect = selected.length === currentQ.answer.length && 
+                        selected.every(s => currentQ.answer.includes(s));
+        } else if (qType === 'match_following') {
+            isCorrect = currentQ.pairs.every(p => selected[p.left] === p.right);
+        }
+    }
 
     const difficultyConfig = {
         easy:   { label: 'EASY',   color: '#16a34a', bg: '#dcfce7' },
@@ -447,12 +474,83 @@ function SegmentViewer({ segment, courseIndex, setCurrentView, setCourses }) {
         setActiveTab('quiz');
     };
 
+    // --- single_mcq handler ---
     const handleOptionSelect = (opt) => {
-        if (selected) return;
+        if (showResult) return;
         setAnswers(prev => ({ ...prev, [quizIndex]: opt }));
         setShowResult(true);
     };
 
+    // --- multiple_mcq handlers ---
+    const toggleMultipleOption = (opt) => {
+        if (showResult) return;
+        setAnswers(prev => {
+            const currentSelected = prev[quizIndex] || [];
+            if (currentSelected.includes(opt)) {
+                return { ...prev, [quizIndex]: currentSelected.filter(o => o !== opt) };
+            } else {
+                return { ...prev, [quizIndex]: [...currentSelected, opt] };
+            }
+        });
+    };
+
+    const checkMultipleAnswer = () => {
+        if (!selected || selected.length === 0) return;
+        const requiredAnswers = currentQ.answer.length;
+        if (selected.length < requiredAnswers) {
+            alert(`There is one more correct answer... Please select ${requiredAnswers} answers before checking. You have selected ${selected.length}.`);
+            return;
+        }
+        setShowResult(true);
+    };
+
+    // --- match_following handlers ---
+    const handleDragStart = (e, rightItem) => {
+        if (showResult) {
+            e.preventDefault();
+            return;
+        }
+        setDraggedItem(rightItem);
+        // Required for Firefox
+        e.dataTransfer.setData('text/plain', rightItem);
+    };
+
+    const handleDrop = (e, leftKey) => {
+        e.preventDefault();
+        if (showResult || !draggedItem) return;
+        setAnswers(prev => {
+            const currentMapping = prev[quizIndex] || {};
+            // Remove dragged item from any previous drops to allow swapping
+            const newMapping = {};
+            for (const [k, v] of Object.entries(currentMapping)) {
+                if (v !== draggedItem) newMapping[k] = v;
+            }
+            newMapping[leftKey] = draggedItem;
+            return { ...prev, [quizIndex]: newMapping };
+        });
+        setDraggedItem(null);
+    };
+    
+    const removeMatch = (leftKey) => {
+        if (showResult) return;
+        setAnswers(prev => {
+            const currentMapping = { ...(prev[quizIndex] || {}) };
+            delete currentMapping[leftKey];
+            return { ...prev, [quizIndex]: currentMapping };
+        });
+    };
+
+    const checkMatchAnswer = () => {
+        const requiredMatches = currentQ.pairs.length;
+        const currentMatches = Object.keys(selected || {}).length;
+        if (currentMatches < requiredMatches) {
+            alert(`Please match all ${requiredMatches} pairs before checking.`);
+            return;
+        }
+        setShowResult(true);
+    };
+
+    // --- General flow ---
     const handleNext = () => {
         setShowResult(false);
         if (quizIndex < totalQ - 1) {
@@ -485,8 +583,21 @@ function SegmentViewer({ segment, courseIndex, setCurrentView, setCourses }) {
         setCurrentView('course-map');
     };
 
-    const finalScore = questions.filter((q, i) => answers[i] === q.answer).length;
-    const passMark   = Math.ceil(totalQ * 0.6);
+    // Score calculation
+    let finalScore = 0;
+    questions.forEach((q, i) => {
+        const sel = answers[i];
+        if (!sel) return;
+        if (q.type === 'single_mcq' || !q.type) {
+            if (sel === q.answer) finalScore++;
+        } else if (q.type === 'multiple_mcq') {
+            if (sel.length === q.answer.length && sel.every(s => q.answer.includes(s))) finalScore++;
+        } else if (q.type === 'match_following') {
+            if (q.pairs.every(p => sel[p.left] === p.right)) finalScore++;
+        }
+    });
+    
+    const passMark = Math.ceil(totalQ * 0.6);
 
     return (
         <div className="page-container">
@@ -513,8 +624,6 @@ function SegmentViewer({ segment, courseIndex, setCurrentView, setCourses }) {
                 </div>
 
                 <div style={{ marginTop: '2rem' }}>
-
-                    {/* ── VIDEO TAB ─────────────────────────────────────────────── */}
                     {activeTab === 'video' && (
                         <div>
                             <div className="video-container" style={{ position: 'relative' }}>
@@ -540,7 +649,6 @@ function SegmentViewer({ segment, courseIndex, setCurrentView, setCourses }) {
                         </div>
                     )}
 
-                    {/* ── QUIZ TAB ──────────────────────────────────────────────── */}
                     {activeTab === 'quiz' && (
                         <div>
                             {totalQ === 0 ? (
@@ -582,39 +690,195 @@ function SegmentViewer({ segment, courseIndex, setCurrentView, setCourses }) {
                                     </div>
                                     <h2 style={{ fontSize: '1.5rem', marginBottom: '2rem' }}>{currentQ?.question}</h2>
                                     
-                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-                                        {currentQ?.options?.map((opt, i) => {
-                                            let btnClass = 'btn-secondary';
-                                            if (showResult) {
-                                                if (opt === currentQ.answer) {
-                                                    btnClass = 'btn-primary';
-                                                } else if (opt === selected) {
-                                                    btnClass = 'btn-danger';
+                                    {/* --- SINGLE MCQ --- */}
+                                    {(qType === 'single_mcq' || !qType) && (
+                                        <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                                            {currentQ?.options?.map((opt, i) => {
+                                                let btnClass = 'btn-secondary';
+                                                if (showResult) {
+                                                    if (opt === currentQ.answer) {
+                                                        btnClass = 'btn-primary';
+                                                    } else if (opt === selected) {
+                                                        btnClass = 'btn-danger';
+                                                    }
                                                 }
-                                            }
-                                            return (
-                                                <button 
-                                                    key={i} 
-                                                    className={`btn ${btnClass}`}
-                                                    style={{ 
-                                                        justifyContent: 'flex-start', 
-                                                        padding: '1rem',
-                                                        backgroundColor: btnClass === 'btn-danger' ? '#fee2e2' : undefined,
-                                                        color: btnClass === 'btn-danger' ? '#b91c1c' : undefined,
-                                                        borderColor: btnClass === 'btn-danger' ? '#f87171' : undefined
-                                                    }}
-                                                    onClick={() => handleOptionSelect(opt)}
-                                                    disabled={showResult}
-                                                >
-                                                    <div style={{ width: '30px', height: '30px', borderRadius: '50%', border: '1px solid currentColor', display: 'flex', alignItems: 'center', justifyContent: 'center', marginRight: '1rem' }}>
-                                                        {String.fromCharCode(65 + i)}
-                                                    </div>
-                                                    {opt}
+                                                return (
+                                                    <button key={i} className={`btn ${btnClass}`}
+                                                        style={{ 
+                                                            justifyContent: 'flex-start', padding: '1rem',
+                                                            backgroundColor: btnClass === 'btn-danger' ? '#fee2e2' : undefined,
+                                                            color: btnClass === 'btn-danger' ? '#b91c1c' : undefined,
+                                                            borderColor: btnClass === 'btn-danger' ? '#f87171' : undefined
+                                                        }}
+                                                        onClick={() => handleOptionSelect(opt)} disabled={showResult}>
+                                                        <div style={{ width: '30px', height: '30px', borderRadius: '50%', border: '1px solid currentColor', display: 'flex', alignItems: 'center', justifyContent: 'center', marginRight: '1rem' }}>
+                                                            {String.fromCharCode(65 + i)}
+                                                        </div>
+                                                        {opt}
+                                                    </button>
+                                                );
+                                            })}
+                                        </div>
+                                    )}
+
+                                    {/* --- MULTIPLE MCQ --- */}
+                                    {qType === 'multiple_mcq' && (
+                                        <div>
+                                            <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', marginBottom: '1.5rem' }}>
+                                                {currentQ?.options?.map((opt, i) => {
+                                                    const isChecked = selected && selected.includes(opt);
+                                                    let bgClass = isChecked ? '#e0f2fe' : '#ffffff';
+                                                    let borderClass = isChecked ? '#0ea5e9' : '#e2e8f0';
+                                                    let textClass = '#1e293b';
+                                                    
+                                                    if (showResult) {
+                                                        const isCorrectOpt = currentQ.answer.includes(opt);
+                                                        if (isCorrectOpt) {
+                                                            bgClass = '#dcfce7'; borderClass = '#22c55e'; textClass = '#16a34a';
+                                                        } else if (isChecked && !isCorrectOpt) {
+                                                            bgClass = '#fee2e2'; borderClass = '#ef4444'; textClass = '#dc2626';
+                                                        }
+                                                    }
+
+                                                    return (
+                                                        <div key={i} 
+                                                            style={{ 
+                                                                display: 'flex', alignItems: 'center', padding: '1rem', 
+                                                                borderRadius: '0.5rem', border: `2px solid ${borderClass}`, 
+                                                                backgroundColor: bgClass, color: textClass,
+                                                                cursor: showResult ? 'default' : 'pointer',
+                                                                transition: 'all 0.2s'
+                                                            }}
+                                                            onClick={() => toggleMultipleOption(opt)}
+                                                        >
+                                                            <div style={{ 
+                                                                width: '24px', height: '24px', borderRadius: '4px', 
+                                                                border: `2px solid ${borderClass}`, marginRight: '1rem',
+                                                                backgroundColor: isChecked ? borderClass : 'transparent',
+                                                                display: 'flex', alignItems: 'center', justifyContent: 'center'
+                                                            }}>
+                                                                {isChecked && <i className="fa-solid fa-check" style={{ color: 'white', fontSize: '12px' }}></i>}
+                                                            </div>
+                                                            {opt}
+                                                        </div>
+                                                    );
+                                                })}
+                                            </div>
+                                            {!showResult && (
+                                                <button className="btn btn-primary" onClick={checkMultipleAnswer}>
+                                                    Check Answer
                                                 </button>
-                                            );
-                                        })}
-                                    </div>
-                                    
+                                            )}
+                                        </div>
+                                    )}
+
+                                    {/* --- MATCH THE FOLLOWING --- */}
+                                    {qType === 'match_following' && (
+                                        <div>
+                                            <p style={{ color: 'var(--text-muted)', marginBottom: '1rem' }}>
+                                                Drag the options from the right pool and drop them onto the matching slots on the left.
+                                            </p>
+                                            <div style={{ display: 'flex', gap: '2rem', flexWrap: 'wrap' }}>
+                                                {/* Left Targets */}
+                                                <div style={{ flex: '1 1 300px', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                                                    {currentQ.pairs.map((p, i) => {
+                                                        const matchedItem = selected[p.left];
+                                                        let borderClass = '#cbd5e1';
+                                                        let bgClass = '#f8fafc';
+                                                        if (showResult) {
+                                                            const isCorrectMatch = matchedItem === p.right;
+                                                            if (isCorrectMatch) {
+                                                                borderClass = '#22c55e'; bgClass = '#dcfce7';
+                                                            } else {
+                                                                borderClass = '#ef4444'; bgClass = '#fee2e2';
+                                                            }
+                                                        } else if (matchedItem) {
+                                                            borderClass = '#0ea5e9'; bgClass = '#e0f2fe';
+                                                        }
+
+                                                        return (
+                                                            <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+                                                                <div style={{ flex: 1, padding: '1rem', backgroundColor: '#f1f5f9', borderRadius: '0.5rem', fontWeight: 500 }}>
+                                                                    {p.left}
+                                                                </div>
+                                                                <div style={{ color: '#94a3b8' }}><i className="fa-solid fa-arrow-right"></i></div>
+                                                                <div 
+                                                                    onDragOver={(e) => e.preventDefault()}
+                                                                    onDrop={(e) => handleDrop(e, p.left)}
+                                                                    style={{ 
+                                                                        flex: 1, padding: matchedItem ? '0.8rem' : '1rem', 
+                                                                        border: `2px dashed ${borderClass}`, 
+                                                                        backgroundColor: bgClass,
+                                                                        borderRadius: '0.5rem', minHeight: '60px',
+                                                                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                                                        position: 'relative'
+                                                                    }}
+                                                                >
+                                                                    {matchedItem ? (
+                                                                        <div style={{ 
+                                                                            backgroundColor: 'white', padding: '0.6rem 1rem', 
+                                                                            borderRadius: '0.3rem', boxShadow: '0 2px 4px rgba(0,0,0,0.05)',
+                                                                            width: '100%', textAlign: 'center', position: 'relative'
+                                                                        }}>
+                                                                            {matchedItem}
+                                                                            {!showResult && (
+                                                                                <button onClick={() => removeMatch(p.left)} style={{ position: 'absolute', top: '-8px', right: '-8px', background: '#ef4444', color: 'white', border: 'none', borderRadius: '50%', width: '20px', height: '20px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '10px' }}>
+                                                                                    <i className="fa-solid fa-xmark"></i>
+                                                                                </button>
+                                                                            )}
+                                                                        </div>
+                                                                    ) : (
+                                                                        <span style={{ color: '#cbd5e1', fontSize: '0.9rem' }}>Drop here</span>
+                                                                    )}
+                                                                </div>
+                                                            </div>
+                                                        );
+                                                    })}
+                                                </div>
+
+                                                {/* Right Source Pool */}
+                                                <div style={{ flex: '1 1 200px', backgroundColor: '#f8fafc', padding: '1.5rem', borderRadius: '0.5rem', border: '1px solid #e2e8f0' }}>
+                                                    <h4 style={{ marginBottom: '1rem', color: '#64748b' }}>Options Pool</h4>
+                                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.8rem' }}>
+                                                        {currentQ.pairs
+                                                            .map(p => p.right)
+                                                            // We should shuffle these, but for simplicity we rely on React rendering them. We can sort alphabetically to mix them up.
+                                                            .sort((a, b) => a.localeCompare(b))
+                                                            .map((rightItem, i) => {
+                                                                // Hide if already used
+                                                                const isUsed = Object.values(selected || {}).includes(rightItem);
+                                                                if (isUsed) return null;
+                                                                
+                                                                return (
+                                                                    <div 
+                                                                        key={i}
+                                                                        draggable={!showResult}
+                                                                        onDragStart={(e) => handleDragStart(e, rightItem)}
+                                                                        style={{ 
+                                                                            backgroundColor: 'white', padding: '0.8rem', 
+                                                                            borderRadius: '0.5rem', border: '1px solid #cbd5e1',
+                                                                            cursor: showResult ? 'default' : 'grab',
+                                                                            boxShadow: '0 2px 4px rgba(0,0,0,0.05)',
+                                                                            opacity: draggedItem === rightItem ? 0.5 : 1
+                                                                        }}
+                                                                    >
+                                                                        {rightItem}
+                                                                    </div>
+                                                                );
+                                                            })
+                                                        }
+                                                    </div>
+                                                </div>
+                                            </div>
+                                            {!showResult && (
+                                                <button className="btn btn-primary" onClick={checkMatchAnswer} style={{ marginTop: '1.5rem' }}>
+                                                    Check Answer
+                                                </button>
+                                            )}
+                                        </div>
+                                    )}
+
+                                    {/* --- SHARED RESULT AREA --- */}
                                     {showResult && (
                                         <div style={{ marginTop: '2rem', padding: '1.5rem', backgroundColor: isCorrect ? '#ecfdf5' : '#fee2e2', color: isCorrect ? '#047857' : '#b91c1c', borderRadius: '0.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                                             <div>
@@ -624,7 +888,11 @@ function SegmentViewer({ segment, courseIndex, setCurrentView, setCourses }) {
                                                         : <><i className="fa-solid fa-circle-xmark" style={{ marginRight: '0.5rem' }}></i> Incorrect</>
                                                     }
                                                 </h3>
-                                                {!isCorrect && <p style={{ marginTop: '0.5rem', marginBottom: 0 }}>The correct answer is: <strong>{currentQ.answer}</strong></p>}
+                                                
+                                                {!isCorrect && qType === 'single_mcq' && <p style={{ marginTop: '0.5rem', marginBottom: 0 }}>The correct answer is: <strong>{currentQ.answer}</strong></p>}
+                                                {!isCorrect && qType === 'multiple_mcq' && <p style={{ marginTop: '0.5rem', marginBottom: 0 }}>The correct answers were: <strong>{currentQ.answer.join(' & ')}</strong></p>}
+                                                {!isCorrect && qType === 'match_following' && <p style={{ marginTop: '0.5rem', marginBottom: 0 }}>Check the matching logic carefully.</p>}
+                                                
                                                 {currentQ?.explanation && <p style={{ marginTop: '0.5rem', marginBottom: 0, fontStyle: 'italic' }}>{currentQ.explanation}</p>}
                                             </div>
                                             <button className="btn" style={{ backgroundColor: isCorrect ? '#047857' : '#b91c1c', color: 'white' }} onClick={handleNext}>

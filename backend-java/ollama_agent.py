@@ -100,15 +100,39 @@ NON-NEGOTIABLE: Never output immediately. Always run: Generate → Validate → 
 CRITICAL OUTPUT FORMAT:
 Respond ONLY with a valid JSON array. Absolutely NO markdown, NO backticks, NO explanation text, NO preamble.
 Start your response with [ and end with ].
-Every element MUST match exactly:
+
+Your JSON must contain a mix of question types. The `type` must be exactly one of: `single_mcq`, `multiple_mcq`, `match_following`.
+
+Example structure for `single_mcq` or `multiple_mcq`:
 [
   {
+    "type": "single_mcq",
     "question": "The question text ending with a question mark?",
-    "options": ["Option A text", "Option B text", "Option C text", "Option D text"],
-    "answer": "EXACT text of correct option — must match one of the 4 options character-for-character",
+    "options": ["Option A", "Option B", "Option C", "Option D"],
+    "answer": "EXACT text of correct option",
     "difficulty": "easy"
+  },
+  {
+    "type": "multiple_mcq",
+    "question": "Select TWO correct statements...",
+    "options": ["Option A", "Option B", "Option C", "Option D"],
+    "answer": ["Option A", "Option C"],
+    "difficulty": "hard"
+  },
+  {
+    "type": "match_following",
+    "question": "Match the concepts with their definitions.",
+    "pairs": [
+      {"left": "Concept 1", "right": "Definition 1"},
+      {"left": "Concept 2", "right": "Definition 2"},
+      {"left": "Concept 3", "right": "Definition 3"},
+      {"left": "Concept 4", "right": "Definition 4"}
+    ],
+    "difficulty": "medium"
   }
 ]
+
+RULES FOR OPTIONS: For MCQ types, the `options` array MUST contain exactly 4 perfectly unique items. Do NOT duplicate options.
 difficulty must be exactly one of: easy, medium, hard (lowercase).""".replace("{QUIZ_TEMPLATES}", QUIZ_TEMPLATES).replace("{CONFUSION_FRAMEWORK}", CONFUSION_FRAMEWORK)
 
 
@@ -236,20 +260,45 @@ def generate_full_episode_quiz(transcript, episode_id, num_questions=10):
     # Structural validation — processor.py is the authority on correctness
     valid = []
     for q in questions:
-        if (
-            isinstance(q, dict)
-            and "question" in q
-            and "options"  in q
-            and "answer"   in q
-            and "difficulty" in q
-            and isinstance(q["options"], list)
-            and len(q["options"]) == 4
-            and q["answer"] in q["options"]
-            and q["difficulty"] in ("easy", "medium", "hard")
-        ):
+        if not isinstance(q, dict) or "type" not in q or "question" not in q or "difficulty" not in q:
+            print(f"[QuizEngine] Rejected malformed question (missing base fields): {str(q)[:200]}", file=sys.stderr)
+            continue
+            
+        q_type = q["type"]
+        is_valid = False
+        
+        if q_type == "single_mcq":
+            if (
+                "options" in q and "answer" in q
+                and isinstance(q["options"], list)
+                and len(q["options"]) == 4
+                and len(set(q["options"])) == 4  # No duplicates
+                and isinstance(q["answer"], str)
+                and q["answer"] in q["options"]
+            ):
+                is_valid = True
+        elif q_type == "multiple_mcq":
+            if (
+                "options" in q and "answer" in q
+                and isinstance(q["options"], list)
+                and len(q["options"]) == 4
+                and len(set(q["options"])) == 4  # No duplicates
+                and isinstance(q["answer"], list)
+                and all(a in q["options"] for a in q["answer"])
+            ):
+                is_valid = True
+        elif q_type == "match_following":
+            if (
+                "pairs" in q
+                and isinstance(q["pairs"], list)
+                and all(isinstance(p, dict) and "left" in p and "right" in p for p in q["pairs"])
+            ):
+                is_valid = True
+                
+        if is_valid and q["difficulty"] in ("easy", "medium", "hard"):
             valid.append(q)
         else:
-            print(f"[QuizEngine] Rejected malformed question: {str(q)[:200]}", file=sys.stderr)
+            print(f"[QuizEngine] Rejected malformed or duplicate-option question: {str(q)[:200]}", file=sys.stderr)
 
     print(f"[QuizEngine] {len(valid)}/{len(questions)} questions passed structural validation.", file=sys.stderr)
     return valid if valid else None

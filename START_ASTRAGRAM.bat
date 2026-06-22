@@ -25,14 +25,14 @@ echo.
 echo  Starting services...
 echo.
 
-:: STEP 1 : Kill anything on port 8080
-echo  [1/4]  Clearing port %PORT%...
-for /f "tokens=5" %%P in ('netstat -aon 2^>nul ^| findstr ":%PORT% "') do (
-    if not "%%P"=="0" (
-        taskkill /PID %%P /F >nul 2>&1
-    )
+:: STEP 1 : Find an available port starting from 8080
+echo  [1/4]  Finding an available port...
+:CHECK_PORT
+netstat -aon 2>nul | findstr ":%PORT% " >nul
+if %errorlevel%==0 (
+    set /a PORT+=1
+    goto :CHECK_PORT
 )
-ping 127.0.0.1 -n 3 >nul
 echo         OK - port %PORT% is free.
 echo.
 
@@ -142,7 +142,7 @@ echo.
 
 :: Start the server
 cd /d "%BACKEND%"
-"%JAVA%" -jar "%JAR%"
+"%JAVA%" -Dserver.port=%PORT% -jar "%JAR%"
 
 :: Script ends when server stops
 echo.
