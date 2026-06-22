@@ -28,11 +28,16 @@ echo.
 :: STEP 1 : Find an available port starting from 8080
 echo  [1/4]  Finding an available port...
 :CHECK_PORT
+if exist "%TEMP%\astragram_port_%PORT%.lock" (
+    set /a PORT+=1
+    goto :CHECK_PORT
+)
 netstat -aon 2>nul | findstr ":%PORT% " >nul
 if %errorlevel%==0 (
     set /a PORT+=1
     goto :CHECK_PORT
 )
+echo locked > "%TEMP%\astragram_port_%PORT%.lock"
 echo         OK - port %PORT% is free.
 echo.
 
@@ -83,7 +88,7 @@ ping 127.0.0.1 -n 4 >nul
 goto :START_SERVER
 
 :OLLAMA_FOUND
-start /B /MIN "" cmd /c "set OLLAMA_NUM_PARALLEL=4 && "%OLLAMA_EXE%" serve" ^> "%TEMP%\ollama.log" 2^>^&1
+start /B /MIN "" cmd /c "set OLLAMA_NUM_PARALLEL=4 && "%OLLAMA_EXE%" serve > "%TEMP%\ollama.log" 2>&1"
 ping 127.0.0.1 -n 5 >nul
 echo         Ollama running.
 
@@ -145,6 +150,7 @@ cd /d "%BACKEND%"
 "%JAVA%" -Dserver.port=%PORT% -jar "%JAR%"
 
 :: Script ends when server stops
+if exist "%TEMP%\astragram_port_%PORT%.lock" del "%TEMP%\astragram_port_%PORT%.lock"
 echo.
 echo  Server stopped.
 pause
