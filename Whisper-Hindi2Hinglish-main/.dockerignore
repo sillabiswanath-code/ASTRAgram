@@ -1,0 +1,71 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+
+# Virtual environments
+venv/
+env/
+ENV/
+.venv
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Git
+.git/
+.gitignore
+.gitattributes
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project specific
+uploads/
+downloads/
+*.srt
+*.mp4
+*.avi
+*.mov
+*.mkv
+*.webm
+*.flv
+*.wmv
+*.m4v
+temp_audio_*.wav
+
+# Documentation (not needed in container)
+*.md
+docs/
+
+# Status files
+CUDA_SETUP_COMPLETE.txt
+SERVER_RUNNING.txt
+READY_TO_USE.txt
+
+# Tests (not needed in container)
+tests/
+.pytest_cache/
+.coverage
+
+# Model cache
+.cache/
+models/
+
+# Development files
+requirements-dev.txt
+requirements-cuda.txt
+
+# Claude
+.claude/

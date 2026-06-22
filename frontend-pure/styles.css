@@ -1,0 +1,168 @@
+:root {
+    --primary: #eab308; /* Yellow 500 */
+    --primary-dark: #ca8a04; /* Yellow 600 */
+    --primary-light: #fefce8; /* Yellow 50 */
+    --bg-main: #f8fafc; /* Slate 50 */
+    --bg-card: #ffffff; /* White */
+    --text-main: #0f172a; /* Slate 900 */
+    --text-muted: #64748b; /* Slate 500 */
+    --border-color: #e2e8f0; /* Slate 200 */
+    --font-family: 'Inter', 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+}
+
+* {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}
+
+body {
+    font-family: var(--font-family);
+    background-color: var(--bg-main);
+    color: var(--text-main);
+    -webkit-font-smoothing: antialiased;
+}
+
+/* Navbar */
+.navbar {
+    height: 80px;
+    background-color: var(--bg-card);
+    border-bottom: 1px solid var(--border-color);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 4rem;
+    position: sticky;
+    top: 0;
+    z-index: 100;
+}
+
+.nav-brand {
+    font-size: 1.5rem;
+    font-weight: 800;
+    color: var(--text-main);
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.nav-links {
+    display: flex;
+    gap: 2.5rem;
+}
+
+.nav-link {
+    color: var(--text-main);
+    text-decoration: none;
+    font-weight: 500;
+    font-size: 1rem;
+    transition: color 0.2s;
+}
+
+.nav-link:hover {
+    color: var(--primary);
+}
+
+/* Page Content */
+.page-container {
+    padding: 4rem 2rem;
+    max-width: 1200px;
+    margin: 0 auto;
+    width: 100%;
+}
+
+.hero-section {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 4rem 0;
+    gap: 4rem;
+}
+
+.hero-content {
+    flex: 1;
+}
+
+.page-title {
+    font-size: 3.5rem;
+    font-weight: 800;
+    line-height: 1.1;
+    margin-bottom: 1.5rem;
+    color: var(--text-main);
+}
+
+/* Cards */
+.card {
+    background-color: var(--bg-card);
+    border-radius: 1rem;
+    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -1px rgba(0, 0, 0, 0.03);
+    padding: 2rem;
+    border: 1px solid var(--border-color);
+    margin-bottom: 2rem;
+}
+
+.course-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 2rem;
+}
+
+/* Forms */
+.form-group { margin-bottom: 1.5rem; }
+.form-label { display: block; margin-bottom: 0.5rem; font-weight: 600; color: var(--text-main); }
+.form-input {
+    width: 100%; padding: 0.75rem 1rem; border: 1px solid var(--border-color);
+    border-radius: 0.5rem; font-size: 1rem; font-family: var(--font-family); transition: all 0.2s;
+}
+.form-input:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px var(--primary-light); }
+
+/* Buttons */
+.btn {
+    display: inline-flex; align-items: center; justify-content: center;
+    padding: 0.75rem 1.5rem; border-radius: 0.5rem; font-weight: 600;
+    font-size: 1rem; cursor: pointer; transition: all 0.2s; border: none;
+}
+.btn-primary { background-color: var(--primary); color: white; }
+.btn-primary:hover { background-color: var(--primary-dark); }
+.btn-secondary { background-color: white; color: var(--text-main); border: 1px solid var(--border-color); }
+.btn-secondary:hover { background-color: var(--bg-main); }
+.btn-danger { background-color: #fee2e2; color: #b91c1c; }
+.btn-danger:hover { background-color: #fecaca; }
+
+/* Tabs */
+.tabs { display: flex; gap: 1rem; margin-bottom: 2rem; border-bottom: 1px solid var(--border-color); padding-bottom: 1px; }
+.tab-btn {
+    background: none; border: none; padding: 1rem 2rem; font-weight: 600;
+    color: var(--text-muted); cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px;
+    font-size: 1.1rem;
+}
+.tab-btn.active { color: var(--primary); border-bottom-color: var(--primary); }
+.tab-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* Video Player */
+.video-container { width: 100%; border-radius: 1rem; overflow: hidden; background-color: #000; aspect-ratio: 16 / 9; }
+.video-player { width: 100%; height: 100%; object-fit: contain; }
+
+/* Utility */
+.mb-4 { margin-bottom: 1rem; }
+.text-center { text-align: center; }
+.text-muted { color: var(--text-muted); }
+
+/* Auth / Glassmorphism */
+.auth-wrapper { display: flex; align-items: center; justify-content: center; min-height: 100vh; background: var(--bg-main); }
+.glass-card { background: var(--bg-card); border: 1px solid var(--border-color); border-radius: 1.5rem; padding: 3rem; width: 100%; max-width: 450px; box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1); text-align: center; }
+
+/* ===== Logo Splash Animation ===== */
+.logo-scene { width: 100vw; height: 100vh; overflow: hidden; position: fixed; top: 0; left: 0; z-index: 9999; background: #1f2733; animation: logoSceneOut 0.6s ease forwards; animation-delay: 2.4s; }
+.bg-reveal { position: absolute; inset: 0; background: #e9e9e9; transform: scaleX(0); transform-origin: left; animation: revealBg 0.5s ease forwards; }
+.logo-wrapper { position: absolute; left: 50%; top: 50%; display: flex; align-items: center; transform: translate(-50%, -50%); z-index: 2; }
+.logo-pill { width: 100px; height: 38px; border-radius: 999px; background: var(--primary); margin-right: -15px; transform: translateX(120px); animation: pillMove 0.7s ease forwards; animation-delay: 0.25s; }
+.text-mask { overflow: hidden; }
+.logo-text-anim { font-family: Inter, sans-serif; font-weight: 800; font-size: 72px; color: #1c2230; transform: translateX(-100%); animation: revealText 0.9s ease forwards; animation-delay: 0.45s; letter-spacing: -2px; }
+.logo-dot-anim { width: 14px; height: 14px; background: #ef476f; margin-left: 6px; border-radius: 50%; opacity: 0; transform: scale(0); animation: showDot 0.25s ease forwards; animation-delay: 1.2s; flex-shrink: 0; }
+
+@keyframes revealBg { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+@keyframes pillMove { from { transform: translateX(120px); } to { transform: translateX(0); } }
+@keyframes revealText { from { transform: translateX(-100%); } to { transform: translateX(0); } }
+@keyframes showDot { from { opacity: 0; transform: scale(0); } to { opacity: 1; transform: scale(1); } }
+@keyframes logoSceneOut { to { opacity: 0; pointer-events: none; } }

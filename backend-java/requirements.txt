@@ -1,0 +1,10 @@
+youtube-transcript-api
+fpdf2
+transformers
+yt-dlp
+imageio-ffmpeg
+deep-translator
+sumy
+rake-nltk
+nltk
+torch

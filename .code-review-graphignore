@@ -1,0 +1,16 @@
+backend-java/venv/**
+backend-java\venv\**
+frontend-react/node_modules/**
+frontend-react\node_modules\**
+.code-review-graph/**
+.code-review-graph\**
+.git/**
+.git\**
+Whisper-Hindi2Hinglish-main/**
+Whisper-Hindi2Hinglish-main\**
+code-review-graph-main/**
+code-review-graph-main\**
+*.db
+*.sqlite
+*.msi
+*.exe
