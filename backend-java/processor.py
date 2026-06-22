@@ -156,14 +156,14 @@ def generate_quiz_bank(text, episode_id, num_questions=10):
     print(f"[processor] Ollama unavailable for Episode {episode_id}. Returning placeholder.", file=sys.stderr)
     return {
         "questions": [{
-            "question": "Ollama (llama3.2) is required to generate quiz questions. Please start Ollama and reprocess this video.",
+            "question": "Ollama (llama3.1) is required to generate quiz questions. Please start Ollama and reprocess this video.",
             "options": [
-                "Start Ollama: run 'ollama serve' then 'ollama pull llama3.2'",
+                "Start Ollama: run 'ollama serve' then 'ollama pull llama3.1'",
                 "Quiz generation is offline",
                 "AI quiz engine not available",
                 "Please restart with Ollama running"
             ],
-            "answer": "Start Ollama: run 'ollama serve' then 'ollama pull llama3.2'",
+            "answer": "Start Ollama: run 'ollama serve' then 'ollama pull llama3.1'",
             "difficulty": "easy"
         }],
         "ollama_used": False
@@ -194,54 +194,77 @@ def extract_audio(input_video_path, output_audio_path):
         "-vn", "-acodec", "pcm_s16le", "-ar", "16000", "-ac", "1", "-y", output_audio_path
     ], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
+def get_video_duration(video_path):
+    import subprocess
+    try:
+        ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
+        ffprobe_exe = ffmpeg_exe.replace('ffmpeg', 'ffprobe')
+        result = subprocess.run([ffprobe_exe, "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", video_path], stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        return float(result.stdout)
+    except:
+        return 360
+
 def main():
     if len(sys.argv) < 3:
         print(json.dumps({"error": "Missing arguments"}))
         sys.exit(1)
         
-    youtube_url = sys.argv[1]
+    video_input = sys.argv[1]
     format_type = sys.argv[2]
     fast_mode = sys.argv[3] == "true" if len(sys.argv) > 3 else False
     
-    video_id = extract_video_id(youtube_url)
-    if not video_id:
-        print(json.dumps({"error": "Invalid YouTube URL"}))
-        sys.exit(1)
+    is_local_file = os.path.isfile(video_input)
+    
+    if not is_local_file:
+        video_id = extract_video_id(video_input)
+        if not video_id:
+            print(json.dumps({"error": "Invalid input: neither a local file nor a valid YouTube URL"}))
+            sys.exit(1)
+    else:
+        video_id = os.path.splitext(os.path.basename(video_input))[0]
         
     try:
         print("PROGRESS:5:Extracting video info and transcript...", flush=True)
         # Check if we have YouTube Transcripts
         needs_whisper = False
         transcript = []
-        try:
-            ytt_api = YouTubeTranscriptApi()
-            transcript_list = ytt_api.list(video_id)
-            first_transcript = None
-            for tr in transcript_list:
-                first_transcript = tr
-                break
-                
-            if not first_transcript:
+        if not is_local_file:
+            try:
+                ytt_api = YouTubeTranscriptApi()
+                transcript_list = ytt_api.list(video_id)
+                first_transcript = None
+                for tr in transcript_list:
+                    first_transcript = tr
+                    break
+                    
+                if not first_transcript:
+                    needs_whisper = True
+                else:
+                    transcript = first_transcript.fetch()
+            except Exception:
                 needs_whisper = True
-            else:
-                transcript = first_transcript.fetch()
-        except Exception:
+        else:
             needs_whisper = True
             
         # Determine Folder Name
-        try:
-            ydl_opts_info = {'quiet': True, 'noprogress': True, 'no_warnings': True}
-            with yt_dlp.YoutubeDL(ydl_opts_info) as ydl:
-                info_dict = ydl.extract_info(youtube_url, download=False)
-                video_title = info_dict.get('title', video_id)
-                video_duration = info_dict.get('duration', 0)
-                clean_title = re.sub(r'[^\w\s]', '', video_title)
-                words = clean_title.split()[:4]
-                folder_name = "-".join(words) if words else video_id
-        except Exception:
+        if not is_local_file:
+            try:
+                ydl_opts_info = {'quiet': True, 'noprogress': True, 'no_warnings': True}
+                with yt_dlp.YoutubeDL(ydl_opts_info) as ydl:
+                    info_dict = ydl.extract_info(video_input, download=False)
+                    video_title = info_dict.get('title', video_id)
+                    video_duration = info_dict.get('duration', 0)
+                    clean_title = re.sub(r'[^\w\s]', '', video_title)
+                    words = clean_title.split()[:4]
+                    folder_name = "-".join(words) if words else video_id
+            except Exception:
+                folder_name = video_id
+                video_title = f"Course for {video_id}"
+                video_duration = 360 # Default to 6 mins if unknown
+        else:
             folder_name = video_id
-            video_title = f"Course for {video_id}"
-            video_duration = 360 # Default to 6 mins if unknown
+            video_title = f"Local Course: {video_id}"
+            video_duration = get_video_duration(video_input)
             
         output_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "storage", folder_name)
         os.makedirs(output_dir, exist_ok=True)
@@ -249,18 +272,23 @@ def main():
         # Download Full Video
         full_video_path = f"{output_dir}/full_video.mp4"
         if not os.path.exists(full_video_path):
-            print("PROGRESS:15:Downloading full video...", flush=True)
-            ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
-            ydl_opts = {
-                'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/mp4',
-                'outtmpl': full_video_path,
-                'quiet': True,
-                'noprogress': True,
-                'no_warnings': True,
-                'ffmpeg_location': ffmpeg_exe,
-            }
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                ydl.download([youtube_url])
+            if is_local_file:
+                print("PROGRESS:15:Copying local video...", flush=True)
+                import shutil
+                shutil.copy2(video_input, full_video_path)
+            else:
+                print("PROGRESS:15:Downloading full video...", flush=True)
+                ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
+                ydl_opts = {
+                    'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/mp4',
+                    'outtmpl': full_video_path,
+                    'quiet': True,
+                    'noprogress': True,
+                    'no_warnings': True,
+                    'ffmpeg_location': ffmpeg_exe,
+                }
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    ydl.download([video_input])
 
         chunk_duration = 300
         segments = []
@@ -319,6 +347,22 @@ def main():
         processed_segments = []
         translator = GoogleTranslator(source='auto', target='en')
         whisper_pipe = None
+        
+        course_init_data = {
+            "youtube_id": video_id,
+            "course_title": video_title,
+            "segments": [
+                {
+                    "id": s["id"],
+                    "title": s["title"],
+                    "status": "locked",
+                    "video_url": f"/api/course/download/{folder_name}/segment_{s['id']}.mp4",
+                    "screenshot_url": f"/api/course/download/{folder_name}/segment_{s['id']}.jpg",
+                    "quiz": None
+                } for s in segments
+            ]
+        }
+        print(f"COURSE_INIT:{json.dumps(course_init_data)}", flush=True)
         
         # Process Segments (Cut video, Whisper if needed, Translate, Summarize, Quiz)
         total_segs = len(segments)
@@ -415,20 +459,41 @@ def main():
                 "id": seg["id"],
                 "title": seg["title"],
                 "status": "unlocked" if seg["id"] == 1 else "locked",
-                # "material_url": f"/api/course/download/{folder_name}/segment_{seg['id']}.pdf",
                 "video_url": f"/api/course/download/{folder_name}/segment_{seg['id']}.mp4",
                 "screenshot_url": f"/api/course/download/{folder_name}/segment_{seg['id']}.jpg",
-                "quiz": quiz  # {questions: [...], summary: str, ollama_used: bool}
+                "quiz": quiz
             })
+            print(f"SEGMENT_DONE:{json.dumps(processed_segments[-1])}", flush=True)
             
-        print("PROGRESS:95:Finalizing your course...", flush=True)
+        print("PROGRESS:95:Finalizing your course and generating summary...", flush=True)
+        # Generate full bullet-point summary
+        full_text = " ".join([s.get("text", "") for s in segments])[:10000]
+        final_summary = "Failed to generate summary."
+        try:
+            prompt_query = (
+                f"Topic/Title: {video_title}\n\n"
+                f"Task: Generate exactly 5 to 7 'Important Points to Remember'.\n"
+                f"Instructions: Mix the insights from the provided transcript with your own expert, external knowledge regarding the topic '{video_title}'. "
+                f"Do not just summarize the transcript; enrich it with your deep knowledge on this subject. Make it highly accurate and insightful. "
+                f"Transcript:\n{full_text}"
+            )
+            sum_res = ollama_agent.query_ollama(
+                prompt_query, 
+                model=ollama_agent.QUIZ_MODEL, 
+                system_prompt="You are a strict educational expert. Output ONLY a concise bulleted list of the most critical points. No preamble, no conversational text."
+            )
+            if "error" not in sum_res:
+                final_summary = sum_res["response"]
+        except Exception as e:
+            print(f"Summary generation warning: {e}", file=sys.stderr)
+            
         result = {
             "message": "Course built successfully",
             "youtube_id": video_id,
             "course_title": video_title,
-            "segments": processed_segments
+            "final_summary": final_summary
         }
-        print(json.dumps(result))
+        print(f"COURSE_DONE:{json.dumps(result)}", flush=True)
         
     except Exception as e:
         print(json.dumps({"error": f"Processing failed: {str(e)}"}))

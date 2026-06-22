@@ -4,13 +4,16 @@ title ASTRAgram - Live Server
 color 0A
 cls
 
+:: Prevent QuickEdit mode from freezing the console (prevents "sleeping" when user clicks)
+reg add HKCU\Console /v QuickEdit /t REG_DWORD /d 0 /f >nul 2>&1
+
 :: CONFIG
 set "ROOT=%~dp0"
 set "BACKEND=%ROOT%backend-java"
 set "JAR=%BACKEND%\build\libs\backend-java-0.0.1-SNAPSHOT.jar"
 set "VENV_PYTHON=%BACKEND%\venv\Scripts\python.exe"
 set "PORT=8080"
-set "QUIZ_MODEL=llama3.2"
+set "QUIZ_MODEL=llama3.1"
 
 :BOOT
 cls
@@ -80,12 +83,12 @@ ping 127.0.0.1 -n 4 >nul
 goto :START_SERVER
 
 :OLLAMA_FOUND
-start /B /MIN "" cmd /c "%OLLAMA_EXE%" serve ^> "%TEMP%\ollama.log" 2^>^&1
+start /B /MIN "" cmd /c "set OLLAMA_NUM_PARALLEL=4 && "%OLLAMA_EXE%" serve" ^> "%TEMP%\ollama.log" 2^>^&1
 ping 127.0.0.1 -n 5 >nul
 echo         Ollama running.
 
-:: Pull llama3.2 if missing
-"%OLLAMA_EXE%" list 2>nul | findstr /i "llama3.2" >nul 2>&1
+:: Pull llama3.1 if missing
+"%OLLAMA_EXE%" list 2>nul | findstr /i "llama3.1" >nul 2>&1
 if %errorlevel%==0 (
     echo         %QUIZ_MODEL% ready.
 ) else (

@@ -74,6 +74,34 @@ function Navbar({ currentView, setCurrentView }) {
     );
 }
 
+function ToastMessage({ message, type }) {
+    if (!message) return null;
+    const bg = type === 'error' ? '#ef4444' : type === 'success' ? '#10b981' : '#3b82f6';
+    return (
+        <div style={{
+            position: 'fixed',
+            bottom: '20px',
+            right: '20px',
+            backgroundColor: bg,
+            color: 'white',
+            padding: '1rem',
+            borderRadius: '8px',
+            boxShadow: '0 4px 6px rgba(0,0,0,0.1)',
+            zIndex: 9999,
+            display: 'flex',
+            alignItems: 'center',
+            gap: '10px',
+            fontWeight: 'bold',
+            animation: 'fadeIn 0.3s ease-out'
+        }}>
+            {type === 'error' ? <i className="fa-solid fa-circle-xmark"></i> : 
+             type === 'success' ? <i className="fa-solid fa-circle-check"></i> : 
+             <i className="fa-solid fa-wand-magic-sparkles"></i>}
+            {message}
+        </div>
+    );
+}
+
 function Home({ setCurrentView }) {
     return (
         <div className="page-container">
@@ -136,58 +164,21 @@ function Home({ setCurrentView }) {
     );
 }
 
-function CourseBuilder({ setCourses, setCurrentView, setCurrentCourseIndex }) {
+function CourseBuilder({ activeBuild, startBuild, uploadVideoAndBuild }) {
+    const [inputType, setInputType] = useState('youtube');
     const [url, setUrl] = useState('');
+    const [file, setFile] = useState(null);
     const [fastMode, setFastMode] = useState(false);
-    const [loading, setLoading] = useState(false);
-    const [error, setError] = useState(null);
-    const [loadingMessage, setLoadingMessage] = useState('Starting engine...');
-    const [progress, setProgress] = useState(0);
 
     const handleBuild = (e) => {
         e.preventDefault();
-        if (!url) return;
-        
-        setLoading(true);
-        setError(null);
-        setProgress(0);
-        setLoadingMessage('Initializing...');
-        
-        const eventSource = new EventSource(`/api/course/stream-build?url=${encodeURIComponent(url)}&format=pdf&fastMode=${fastMode}`);
-        
-        eventSource.addEventListener('progress', (e) => {
-            const data = e.data;
-            const splitIdx = data.indexOf(':');
-            if (splitIdx !== -1) {
-                const pct = parseInt(data.substring(0, splitIdx), 10);
-                const msg = data.substring(splitIdx + 1);
-                setProgress(pct);
-                setLoadingMessage(msg);
-            }
-        });
-        
-        eventSource.addEventListener('result', (e) => {
-            const data = JSON.parse(e.data);
-            if (data.error) {
-                setError(data.error);
-                setLoading(false);
-            } else {
-                setCourses(prev => {
-                    const updated = [...prev, data];
-                    setCurrentCourseIndex(updated.length - 1);
-                    return updated;
-                });
-                setCurrentView('course-map');
-                setLoading(false);
-            }
-            eventSource.close();
-        });
-        
-        eventSource.onerror = (err) => {
-            setError('Connection to server lost or failed.');
-            eventSource.close();
-            setLoading(false);
-        };
+        if (inputType === 'youtube') {
+            if (!url) return;
+            startBuild(url, fastMode);
+        } else {
+            if (!file) return;
+            uploadVideoAndBuild(file, fastMode);
+        }
     };
 
     return (
@@ -195,53 +186,89 @@ function CourseBuilder({ setCourses, setCurrentView, setCurrentCourseIndex }) {
             <h1 className="page-title">Course Builder</h1>
             <div className="card" style={{ maxWidth: '600px', margin: '0 auto' }}>
                 <p className="mb-4" style={{ color: 'var(--text-muted)' }}>
-                    Paste a YouTube link below. We'll download it, analyze the transcript, cut it into 3-minute segments, and generate reading materials & quizzes.
+                    Provide a YouTube link or upload a local video. We'll analyze the transcript, cut it into 3-minute segments, and generate quizzes.
                 </p>
+                
+                <div style={{ display: 'flex', gap: '1rem', marginBottom: '1.5rem' }}>
+                    <button 
+                        type="button" 
+                        className={`btn ${inputType === 'youtube' ? 'btn-primary' : 'btn-secondary'}`}
+                        onClick={() => setInputType('youtube')}
+                        style={{ flex: 1 }}
+                        disabled={activeBuild?.active}
+                    >
+                        <i className="fa-brands fa-youtube mr-2"></i> YouTube Link
+                    </button>
+                    <button 
+                        type="button" 
+                        className={`btn ${inputType === 'upload' ? 'btn-primary' : 'btn-secondary'}`}
+                        onClick={() => setInputType('upload')}
+                        style={{ flex: 1 }}
+                        disabled={activeBuild?.active}
+                    >
+                        <i className="fa-solid fa-upload mr-2"></i> Upload Video
+                    </button>
+                </div>
+
                 <form onSubmit={handleBuild}>
-                    <div className="form-group">
-                        <label className="form-label">YouTube URL</label>
-                        <input 
-                            type="text" 
-                            className="form-input" 
-                            placeholder="https://www.youtube.com/watch?v=..."
-                            value={url}
-                            onChange={e => setUrl(e.target.value)}
-                            disabled={loading}
-                        />
-                    </div>
+                    {inputType === 'youtube' ? (
+                        <div className="form-group">
+                            <label className="form-label">YouTube URL</label>
+                            <input 
+                                type="text" 
+                                className="form-input" 
+                                placeholder="https://www.youtube.com/watch?v=..."
+                                value={url}
+                                onChange={e => setUrl(e.target.value)}
+                                disabled={activeBuild?.active}
+                            />
+                        </div>
+                    ) : (
+                        <div className="form-group">
+                            <label className="form-label">Video File</label>
+                            <input 
+                                type="file" 
+                                className="form-input" 
+                                accept="video/mp4,video/webm,video/*"
+                                onChange={e => setFile(e.target.files[0])}
+                                disabled={activeBuild?.active}
+                            />
+                        </div>
+                    )}
+                    
                     <div className="form-group" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                         <input 
                             type="checkbox" 
                             id="fastMode" 
                             checked={fastMode}
                             onChange={(e) => setFastMode(e.target.checked)}
-                            disabled={loading}
+                            disabled={activeBuild?.active}
                             style={{ width: '18px', height: '18px', accentColor: 'var(--primary)' }}
                         />
                         <label htmlFor="fastMode" style={{ margin: 0, cursor: 'pointer', color: 'var(--text-main)', fontWeight: '500' }}>
                             Fast Mode (Skip AI Evaluation)
                         </label>
                     </div>
-                    {error && (
+                    {activeBuild.error && (
                         <div style={{ backgroundColor: '#fee2e2', color: '#b91c1c', padding: '1rem', borderRadius: '0.5rem', marginBottom: '1rem' }}>
-                            <i className="fa-solid fa-circle-exclamation mr-2"></i> {error}
+                            <i className="fa-solid fa-circle-exclamation mr-2"></i> {activeBuild.error}
                         </div>
                     )}
                     
-                    {loading ? (
+                    {activeBuild.active ? (
                         <div style={{ padding: '2rem', backgroundColor: '#f8fafc', borderRadius: '0.5rem', border: '1px solid #e2e8f0' }}>
-                            <h3 style={{ fontSize: '1.2rem', color: 'var(--text-main)', marginBottom: '1.5rem', textAlign: 'center' }}>Building your course...</h3>
+                            <h3 style={{ fontSize: '1.2rem', color: 'var(--text-main)', marginBottom: '1.5rem', textAlign: 'center' }}>Initializing course...</h3>
                             
                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem', fontSize: '0.95rem' }}>
                                 <span style={{ color: 'var(--primary-dark)', fontWeight: 'bold' }}>
                                     <i className="fa-solid fa-circle-notch fa-spin" style={{ marginRight: '8px' }}></i>
-                                    {loadingMessage}
+                                    {activeBuild.message}
                                 </span>
-                                <span style={{ fontWeight: 'bold', color: 'var(--text-main)' }}>{progress}%</span>
+                                <span style={{ fontWeight: 'bold', color: 'var(--text-main)' }}>{activeBuild.progress}%</span>
                             </div>
                             
                             <div style={{ width: '100%', height: '12px', backgroundColor: '#e2e8f0', borderRadius: '6px', overflow: 'hidden', marginBottom: '0.5rem' }}>
-                                <div style={{ height: '100%', width: `${progress}%`, backgroundColor: 'var(--primary)', transition: 'width 0.3s ease-out' }}></div>
+                                <div style={{ height: '100%', width: `${activeBuild.progress}%`, backgroundColor: 'var(--primary)', transition: 'width 0.3s ease-out' }}></div>
                             </div>
                         </div>
                     ) : (
@@ -304,7 +331,7 @@ function MyCoursesDashboard({ courses, setCurrentView, setCurrentCourseIndex }) 
     );
 }
 
-function CourseMap({ course, setCurrentView, setCurrentSegment }) {
+function CourseMap({ course, setCurrentView, setCurrentSegment, activeBuild }) {
     if (!course) return null;
     
     return (
@@ -318,26 +345,61 @@ function CourseMap({ course, setCurrentView, setCurrentSegment }) {
             <h1 className="page-title">{course.course_title || "Course Details"}</h1>
             
             <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
-                {course.segments.map((seg, idx) => (
-                    <div key={seg.id} className="card" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', opacity: seg.status === 'locked' ? 0.6 : 1 }}>
-                        <div>
-                            <h3 style={{ fontSize: '1.25rem', fontWeight: 'bold', marginBottom: '0.5rem' }}>
-                                {seg.status === 'locked' ? <i className="fa-solid fa-lock" style={{ color: 'var(--text-muted)', marginRight: '8px' }}></i> : <i className="fa-solid fa-unlock" style={{ color: 'var(--primary)', marginRight: '8px' }}></i>}
-                                {seg.title}
-                            </h3>
-                            <p style={{ color: 'var(--text-muted)' }}>Phase {idx + 1} - 3 Minute Video & Quiz</p>
+                {course.segments && course.segments.map((seg, idx) => {
+                    const isProcessing = seg.status === 'locked' && activeBuild?.active && activeBuild?.youtube_id === course.youtube_id;
+                    return (
+                        <div key={seg.id} className="card" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', opacity: seg.status === 'locked' ? 0.6 : 1, position: 'relative', overflow: 'hidden' }}>
+                            <div>
+                                <h3 style={{ fontSize: '1.25rem', fontWeight: 'bold', marginBottom: '0.5rem' }}>
+                                    {seg.status === 'locked' ? <i className="fa-solid fa-lock" style={{ color: 'var(--text-muted)', marginRight: '8px' }}></i> : <i className="fa-solid fa-unlock" style={{ color: 'var(--primary)', marginRight: '8px' }}></i>}
+                                    {seg.title}
+                                </h3>
+                                <p style={{ color: 'var(--text-muted)' }}>Phase {idx + 1} - 3 Minute Video & Quiz</p>
+                            </div>
+                            {seg.status !== 'locked' ? (
+                                <button className="btn btn-primary" onClick={() => {
+                                    setCurrentSegment(seg);
+                                    setCurrentView('segment');
+                                }}>
+                                    Start Segment <i className="fa-solid fa-arrow-right" style={{ marginLeft: '8px' }}></i>
+                                </button>
+                            ) : isProcessing ? (
+                                <span style={{ color: 'var(--primary)', fontWeight: 'bold', fontSize: '0.9rem' }}>
+                                    <i className="fa-solid fa-circle-notch fa-spin" style={{ marginRight: '8px' }}></i>
+                                    Generating...
+                                </span>
+                            ) : null}
                         </div>
-                        {seg.status !== 'locked' && (
-                            <button className="btn btn-primary" onClick={() => {
-                                setCurrentSegment(seg);
-                                setCurrentView('segment');
-                            }}>
-                                Start Segment <i className="fa-solid fa-arrow-right" style={{ marginLeft: '8px' }}></i>
-                            </button>
-                        )}
-                    </div>
-                ))}
+                    );
+                })}
             </div>
+
+            {activeBuild?.active && activeBuild?.youtube_id === course.youtube_id && (
+                <div style={{ marginTop: '2rem', padding: '1.5rem', backgroundColor: '#f8fafc', borderRadius: '0.5rem', border: '1px solid #e2e8f0' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem', fontSize: '0.95rem' }}>
+                        <span style={{ color: 'var(--primary-dark)', fontWeight: 'bold' }}>
+                            <i className="fa-solid fa-circle-notch fa-spin" style={{ marginRight: '8px' }}></i>
+                            {activeBuild.message}
+                        </span>
+                        <span style={{ fontWeight: 'bold', color: 'var(--text-main)' }}>{activeBuild.progress}%</span>
+                    </div>
+                    <div style={{ width: '100%', height: '8px', backgroundColor: '#e2e8f0', borderRadius: '4px', overflow: 'hidden' }}>
+                        <div style={{ height: '100%', width: `${activeBuild.progress}%`, backgroundColor: 'var(--primary)', transition: 'width 0.3s ease-out' }}></div>
+                    </div>
+                </div>
+            )}
+
+            {course.final_summary && (
+                <div style={{ marginTop: '3rem', padding: '2rem', backgroundColor: '#ecfdf5', borderRadius: '1rem', border: '1px solid #10b981' }}>
+                    <h2 style={{ fontSize: '1.5rem', fontWeight: 'bold', color: '#047857', marginBottom: '1rem', display: 'flex', alignItems: 'center' }}>
+                        <i className="fa-solid fa-clipboard-check" style={{ marginRight: '12px' }}></i>
+                        Important Points to Remember
+                    </h2>
+                    <div style={{ color: '#065f46', lineHeight: '1.6', fontSize: '1.05rem', whiteSpace: 'pre-line' }}>
+                        {course.final_summary}
+                    </div>
+                </div>
+            )}
         </div>
     );
 }
@@ -689,6 +751,168 @@ function App() {
         () => sessionStorage.getItem('splashPlayed') !== 'true'
     );
 
+    // Global background build state
+    const [activeBuild, setActiveBuild] = useState({
+        active: false,
+        progress: 0,
+        message: '',
+        error: null,
+        youtube_id: null
+    });
+
+    const [ollamaToast, setOllamaToast] = useState(null);
+    const prevStatusRef = React.useRef('starting');
+
+    useEffect(() => {
+        let timeout;
+        const pollOllama = async () => {
+            try {
+                const res = await fetch('/api/course/ollama-status');
+                const data = await res.json();
+                const status = data.status;
+                const prev = prevStatusRef.current;
+                
+                if (status === 'failed' && prev !== 'failed') {
+                    setOllamaToast({ message: 'Ai if failing to do the magic', type: 'error' });
+                    setTimeout(() => setOllamaToast(null), 4000);
+                } else if ((status === 'starting' || status === 'restarted') && prev === 'failed') {
+                    setOllamaToast({ message: 'Ai is again ready to do the magic', type: 'success' });
+                    setTimeout(() => setOllamaToast(null), 4000);
+                } else if (status === 'running' && prev === 'starting') {
+                    setOllamaToast({ message: 'Ai is doing the magic', type: 'info' });
+                    setTimeout(() => setOllamaToast(null), 4000);
+                }
+                
+                prevStatusRef.current = status;
+            } catch (err) {
+                // ignore
+            }
+            timeout = setTimeout(pollOllama, 5000);
+        };
+        pollOllama();
+        return () => clearTimeout(timeout);
+    }, []);
+
+    const uploadVideoAndBuild = async (file, fastMode, retryCount = 0) => {
+        setActiveBuild({ active: true, progress: 5, message: retryCount > 0 ? 'Retrying video upload...' : 'Uploading video...', error: null, youtube_id: null });
+        const formData = new FormData();
+        formData.append('file', file);
+        
+        try {
+            const res = await fetch('/api/course/upload-video', {
+                method: 'POST',
+                body: formData
+            });
+            const data = await res.json();
+            if (data.error) {
+                if (retryCount < 1) {
+                    setActiveBuild(prev => ({ ...prev, error: data.error + ' - Auto-restarting in 3s...', active: true }));
+                    setTimeout(() => uploadVideoAndBuild(file, fastMode, retryCount + 1), 3000);
+                } else {
+                    setActiveBuild(prev => ({ ...prev, error: data.error, active: false }));
+                }
+                return;
+            }
+            startBuild(data.tempFilePath, fastMode, 0, true);
+        } catch (err) {
+            if (retryCount < 1) {
+                setActiveBuild(prev => ({ ...prev, error: 'Upload failed: ' + err.message + ' - Auto-restarting in 3s...', active: true }));
+                setTimeout(() => uploadVideoAndBuild(file, fastMode, retryCount + 1), 3000);
+            } else {
+                setActiveBuild(prev => ({ ...prev, error: 'Upload failed: ' + err.message, active: false }));
+            }
+        }
+    };
+
+    const startBuild = (url, fastMode, retryCount = 0, isLocal = false) => {
+        if (!url) return;
+        
+        setActiveBuild({ active: true, progress: 0, message: retryCount > 0 ? 'Auto-restarting processing...' : 'Initializing...', error: null, youtube_id: null });
+        
+        const eventSource = new EventSource(`/api/course/stream-build?url=${encodeURIComponent(url)}&format=pdf&fastMode=${fastMode}`);
+        let courseIdx = null;
+        let specificErrorReceived = false;
+
+        eventSource.addEventListener('course_init', (e) => {
+            const data = JSON.parse(e.data);
+            setCourses(prev => {
+                const updated = [...prev, data];
+                courseIdx = updated.length - 1;
+                setCurrentCourseIndex(courseIdx);
+                return updated;
+            });
+            setActiveBuild(prev => ({ ...prev, youtube_id: data.youtube_id, message: 'Extracting content...' }));
+            setCurrentView('course-map');
+        });
+
+        eventSource.addEventListener('segment_done', (e) => {
+            const segData = JSON.parse(e.data);
+            setCourses(prev => {
+                if (courseIdx === null) return prev;
+                const newCourses = [...prev];
+                const course = { ...newCourses[courseIdx] };
+                course.segments = course.segments.map(s => s.id === segData.id ? segData : s);
+                newCourses[courseIdx] = course;
+                return newCourses;
+            });
+        });
+
+        eventSource.addEventListener('course_done', (e) => {
+            const data = JSON.parse(e.data);
+            setCourses(prev => {
+                if (courseIdx === null) return prev;
+                const newCourses = [...prev];
+                const course = { ...newCourses[courseIdx] };
+                course.final_summary = data.final_summary;
+                newCourses[courseIdx] = course;
+                return newCourses;
+            });
+            setActiveBuild({ active: false, progress: 100, message: '', error: null, youtube_id: null });
+            eventSource.close();
+        });
+
+        eventSource.addEventListener('progress', (e) => {
+            const data = e.data;
+            const splitIdx = data.indexOf(':');
+            if (splitIdx !== -1) {
+                const pct = parseInt(data.substring(0, splitIdx), 10);
+                const msg = data.substring(splitIdx + 1);
+                setActiveBuild(prev => ({ ...prev, progress: pct, message: msg }));
+            }
+        });
+
+        eventSource.addEventListener('ping', (e) => {
+            // Keep alive heartbeat, ignore
+        });
+
+        const handleFailure = (errorMsg) => {
+            specificErrorReceived = true;
+            eventSource.close();
+            if (retryCount < 1) {
+                setActiveBuild(prev => ({ ...prev, error: errorMsg + ' (Auto-restarting in 3s...)', active: true }));
+                setTimeout(() => {
+                    startBuild(url, fastMode, retryCount + 1, isLocal);
+                }, 3000);
+            } else {
+                setActiveBuild(prev => ({ ...prev, error: errorMsg, active: false }));
+            }
+        };
+
+        eventSource.addEventListener('result', (e) => {
+            const data = JSON.parse(e.data);
+            if (data.error) {
+                handleFailure(data.error);
+            }
+        });
+
+        eventSource.onerror = (err) => {
+            if (!specificErrorReceived) {
+                handleFailure('Connection to server lost or failed.');
+            }
+            eventSource.close();
+        };
+    };
+
     if (showSplash) {
         return <LogoSplash onDone={() => {
             sessionStorage.setItem('splashPlayed', 'true');
@@ -715,7 +939,7 @@ function App() {
                 
                 {currentView === 'home' && <Home setCurrentView={setCurrentView} />}
                 
-                {currentView === 'builder' && <CourseBuilder setCourses={setCourses} setCurrentView={setCurrentView} setCurrentCourseIndex={setCurrentCourseIndex} />}
+                {currentView === 'builder' && <CourseBuilder activeBuild={activeBuild} startBuild={startBuild} uploadVideoAndBuild={uploadVideoAndBuild} />}
                 
                 {currentView === 'my-courses' && <MyCoursesDashboard courses={courses} setCurrentView={setCurrentView} setCurrentCourseIndex={setCurrentCourseIndex} />}
                 
@@ -724,6 +948,7 @@ function App() {
                         course={courses[currentCourseIndex]} 
                         setCurrentView={setCurrentView} 
                         setCurrentSegment={setCurrentSegment} 
+                        activeBuild={activeBuild}
                     />
                 )}
                 

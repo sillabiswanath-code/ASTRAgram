@@ -23,7 +23,7 @@
 
     <!-- Main React App code written in pure JSX -->
     <script>
-        fetch('app.js')
+        fetch('app.js?v=' + new Date().getTime())
             .then(res => {
                 if (!res.ok) throw new Error("HTTP error " + res.status);
                 return res.text();

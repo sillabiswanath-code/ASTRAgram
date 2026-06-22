@@ -15,6 +15,7 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.io.File;
 import java.util.Map;
+import org.springframework.web.multipart.MultipartFile;
 
 @RestController
 @RequestMapping("/api/course")
@@ -47,6 +48,24 @@ public class CourseController {
     @GetMapping(value = "/stream-build", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public SseEmitter streamBuildCourse(@RequestParam String url, @RequestParam String format, @RequestParam boolean fastMode) {
         return videoProcessingService.streamProcessVideo(url, format, fastMode);
+    }
+
+    @PostMapping("/upload-video")
+    public ResponseEntity<?> uploadVideo(@RequestParam("file") MultipartFile file) {
+        try {
+            File tempDir = new File(STORAGE_DIR, "temp_uploads");
+            tempDir.mkdirs();
+            File tempFile = new File(tempDir, System.currentTimeMillis() + "_" + file.getOriginalFilename());
+            file.transferTo(tempFile);
+            return ResponseEntity.ok(Map.of("tempFilePath", tempFile.getAbsolutePath()));
+        } catch (Exception e) {
+            return ResponseEntity.internalServerError().body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    @GetMapping("/ollama-status")
+    public ResponseEntity<Map<String, String>> getOllamaStatus() {
+        return ResponseEntity.ok(Map.of("status", videoProcessingService.getOllamaStatus()));
     }
 
     @GetMapping("/download/{videoId}/{fileName}")

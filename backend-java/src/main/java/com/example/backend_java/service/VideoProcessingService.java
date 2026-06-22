@@ -6,6 +6,9 @@ import java.io.File;
 import java.io.InputStreamReader;
 import java.util.logging.Logger;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 
 @Service
 public class VideoProcessingService {
@@ -13,6 +16,55 @@ public class VideoProcessingService {
 
     // Resolve the backend-java directory from the running jar/class location
     private static final File BASE_DIR = resolveBaseDir();
+
+    private final ScheduledExecutorService monitorExecutor = Executors.newSingleThreadScheduledExecutor();
+    private String ollamaStatus = "starting";
+
+    public VideoProcessingService() {
+        monitorExecutor.scheduleAtFixedRate(this::checkAndRestartOllama, 5, 5, TimeUnit.SECONDS);
+    }
+
+    private void checkAndRestartOllama() {
+        try {
+            Process process = Runtime.getRuntime().exec("tasklist /FI \"IMAGENAME eq ollama.exe\" /NH");
+            BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()));
+            String line;
+            boolean isRunning = false;
+            while ((line = reader.readLine()) != null) {
+                if (line.toLowerCase().contains("ollama.exe")) {
+                    isRunning = true;
+                    break;
+                }
+            }
+            if (!isRunning) {
+                if ("running".equals(ollamaStatus) || "restarted".equals(ollamaStatus)) {
+                    ollamaStatus = "failed"; // Marked as failed temporarily before restarting
+                }
+                LOGGER.info("Ollama is not running. Attempting to restart...");
+                
+                String ollamaExe = "ollama";
+                String localAppData = System.getenv("LOCALAPPDATA");
+                if (localAppData != null && new File(localAppData, "Programs/Ollama/ollama.exe").exists()) {
+                    ollamaExe = new File(localAppData, "Programs/Ollama/ollama.exe").getAbsolutePath();
+                } else if (new File("C:/Program Files/Ollama/ollama.exe").exists()) {
+                    ollamaExe = "C:/Program Files/Ollama/ollama.exe";
+                }
+                
+                ProcessBuilder pb = new ProcessBuilder("cmd", "/c", "start", "/B", "/MIN", "", ollamaExe, "serve");
+                pb.start();
+                Thread.sleep(2000); 
+                ollamaStatus = "restarted"; 
+            } else {
+                ollamaStatus = "running";
+            }
+        } catch (Exception e) {
+            LOGGER.warning("Error checking Ollama status: " + e.getMessage());
+        }
+    }
+
+    public String getOllamaStatus() {
+        return ollamaStatus;
+    }
 
     private static File resolveBaseDir() {
         // When running via gradlew bootRun, working dir is backend-java/
@@ -92,6 +144,16 @@ public class VideoProcessingService {
     public SseEmitter streamProcessVideo(String youtubeUrl, String format, boolean fastMode) {
         // Set timeout to 0 for infinite timeout since processing can take minutes
         SseEmitter emitter = new SseEmitter(0L);
+        ScheduledExecutorService pingExecutor = Executors.newSingleThreadScheduledExecutor();
+
+        // Keep-alive ping every 10 seconds to prevent silent browser timeout
+        pingExecutor.scheduleAtFixedRate(() -> {
+            try {
+                emitter.send(SseEmitter.event().name("ping").data("keep-alive"));
+            } catch (Exception e) {
+                pingExecutor.shutdown();
+            }
+        }, 10, 10, TimeUnit.SECONDS);
 
         new Thread(() -> {
             try {
@@ -115,14 +177,18 @@ public class VideoProcessingService {
                 BufferedReader stdoutReader = new BufferedReader(new InputStreamReader(process.getInputStream()));
                 StringBuilder jsonOutput = new StringBuilder();
                 String line;
-                boolean inJson = false;
 
                 while ((line = stdoutReader.readLine()) != null) {
                     if (line.startsWith("PROGRESS:")) {
-                        // Send progress event
                         emitter.send(SseEmitter.event().name("progress").data(line.substring(9)));
-                    } else if (line.trim().startsWith("{") || inJson) {
-                        inJson = true;
+                    } else if (line.startsWith("COURSE_INIT:")) {
+                        emitter.send(SseEmitter.event().name("course_init").data(line.substring(12)));
+                    } else if (line.startsWith("SEGMENT_DONE:")) {
+                        emitter.send(SseEmitter.event().name("segment_done").data(line.substring(13)));
+                    } else if (line.startsWith("COURSE_DONE:")) {
+                        emitter.send(SseEmitter.event().name("course_done").data(line.substring(12)));
+                    } else if (line.trim().startsWith("{")) {
+                        // Fallback for legacy JSON error outputs
                         jsonOutput.append(line).append("\n");
                     }
                 }
@@ -135,6 +201,7 @@ public class VideoProcessingService {
                 }
 
                 int exitCode = process.waitFor();
+                pingExecutor.shutdown();
 
                 if (stderr.length() > 0) {
                     LOGGER.warning("Python stderr:\n" + stderr);
@@ -144,14 +211,11 @@ public class VideoProcessingService {
                     String errMsg = jsonOutput.toString().trim();
                     if (errMsg.isEmpty()) errMsg = stderr.toString().trim();
                     emitter.send(SseEmitter.event().name("result").data("{\"error\": \"Processing failed: " + errMsg.replace("\"", "\\\"").replace("\n", " ") + "\"}"));
-                } else {
-                    String result = jsonOutput.toString().trim();
-                    if (result.isEmpty()) result = "{\"error\": \"No JSON output found\"}";
-                    emitter.send(SseEmitter.event().name("result").data(result));
                 }
 
                 emitter.complete();
             } catch (Exception e) {
+                pingExecutor.shutdown();
                 try {
                     emitter.send(SseEmitter.event().name("result").data("{\"error\": \"" + e.getMessage() + "\"}"));
                     emitter.complete();

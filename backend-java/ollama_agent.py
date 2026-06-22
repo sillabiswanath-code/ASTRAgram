@@ -4,15 +4,33 @@ import json
 import base64
 import sys
 import re
+import os
 
 OLLAMA_URL = "http://localhost:11434/api/generate"
 DEFAULT_TEXT_MODEL = "openhermes"
 DEFAULT_VISION_MODEL = "llava"
-QUIZ_MODEL = "llama3.2"
+QUIZ_MODEL = "llama3.1"
+
+# Load Quiz Template Library
+template_path = os.path.join(os.path.dirname(__file__), "QUIZ_TEMPLATE_LIBRARY.md")
+try:
+    with open(template_path, "r", encoding="utf-8") as f:
+        QUIZ_TEMPLATES = f.read()
+except Exception as e:
+    print(f"Warning: Could not load QUIZ_TEMPLATE_LIBRARY.md: {e}", file=sys.stderr)
+    QUIZ_TEMPLATES = ""
+
+# Load Question Confusion Framework
+confusion_path = os.path.join(os.path.dirname(__file__), "Question_Confusion_Framework.md")
+try:
+    with open(confusion_path, "r", encoding="utf-8") as f:
+        CONFUSION_FRAMEWORK = f.read()
+except Exception as e:
+    print(f"Warning: Could not load Question_Confusion_Framework.md: {e}", file=sys.stderr)
+    CONFUSION_FRAMEWORK = ""
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # 10-STAGE EDUCATIONAL ASSESSMENT ENGINE — SYSTEM PROMPT
-# Saved as reference: backend-java/quiz_engine_prompt.txt
 # ═══════════════════════════════════════════════════════════════════════════════
 QUIZ_SYSTEM_PROMPT = """You are an Educational Assessment Engine.
 
@@ -22,10 +40,11 @@ STAGE 1: CONTENT UNDERSTANDING
 Extract: Main topic, Subtopics, Definitions, Examples, Explanations, Analogies, Cause-effect relationships, Hidden assumptions, Practical applications.
 Create a Concept Map of all concepts. Identify explicitly and implicitly taught concepts.
 
-STAGE 2: KNOWLEDGE BOUNDARY RULE
-ALLOWED: Concepts directly taught, concepts logically implied, supporting domain knowledge for deeper reasoning.
-NOT ALLOWED: Unrelated concepts, external topics, questions outside learning objectives.
-RULE: Every question must trace back to a concept in the transcript. If traceability fails: REJECT.
+STAGE 2: STRICT DOMAIN RULES
+- Accuracy MUST be >99.9%. Absolutely no factual errors.
+- NEVER mention "the video", "the transcript", "the speaker", or "the platform".
+- Phrase all questions natively as if derived from an authoritative textbook.
+- Use your own combined knowledge to make distractors incredibly confusing and highly plausible.
 
 STAGE 3: QUESTION DESIGN RULES
 AVOID: "What is X?", "Define Y.", "Who invented Z?", "Which statement was mentioned?"
@@ -53,29 +72,23 @@ Every wrong option MUST:
 
 NEVER use: silly answers, joke answers, obviously wrong answers, answers of very different lengths.
 
-Good distractor types: partial truth, reversed causality, misapplied concept, common misconception, correct concept in wrong context.
+STAGE 6: TEMPLATE USAGE & CONFUSION FRAMEWORK
+You MUST use the provided templates from the Universal Quiz Template Library whenever possible. If none of the templates perfectly fit a highly specialized concept, only then may you create your own format.
+You MUST also follow the Question Confusion Framework rules to ensure the questions require deep thinking rather than direct recall.
 
-STAGE 6: KNOWLEDGE AUGMENTATION
-Use own knowledge ONLY to strengthen reasoning. Core concept must remain identical to transcript.
-RULE: Transcript = Ground Truth. Model knowledge = Enhancement only.
+=== QUIZ TEMPLATE LIBRARY ===
+{QUIZ_TEMPLATES}
+=============================
+
+=== QUESTION CONFUSION FRAMEWORK ===
+{CONFUSION_FRAMEWORK}
+====================================
 
 STAGE 7: QUALITY CHECK (run for every question)
-Q1. Based on transcript concepts? Q2. Requires reasoning? Q3. Indirect? Q4. All options plausible?
-Q5. Correct answer uniquely correct? Q6. Avoids memorization? Q7. Memorizer would struggle?
+Q1. Accurate? Q2. Avoids words like 'video/transcript'? Q3. Confusing distractors?
 If ANY = NO → REGENERATE.
 
-STAGE 8: ANSWER VALIDATION (run for every question)
-Step 1: Solve as a student. Step 2: Try alternative interpretations. Step 3: Check multiple correct answers.
-Step 4: Check ambiguity. Step 5: Check conceptual accuracy.
-If multiple correct / ambiguous / mismatch → REJECT AND REGENERATE.
-
-STAGE 9: VALIDATION SCORING
-Score each question 0-100:
-- Concept Alignment ≥ 95, Difficulty ≥ 80, Indirectness ≥ 80
-- Distractor Quality ≥ 85, Answer Uniqueness = 100, Educational Value ≥ 85, Overall ≥ 90
-Regenerate only failed questions. Repeat until ALL pass.
-
-STAGE 10: FINAL APPROVAL GATE
+STAGE 8: FINAL APPROVAL GATE
 Checklist before output:
 ✓ Every question maps to episode concept ✓ No unrelated knowledge ✓ Questions are indirect
 ✓ Require reasoning ✓ Distractors are confusing but fair ✓ No ambiguity ✓ No duplicates
@@ -96,7 +109,7 @@ Every element MUST match exactly:
     "difficulty": "easy"
   }
 ]
-difficulty must be exactly one of: easy, medium, hard (lowercase)."""
+difficulty must be exactly one of: easy, medium, hard (lowercase).""".replace("{QUIZ_TEMPLATES}", QUIZ_TEMPLATES).replace("{CONFUSION_FRAMEWORK}", CONFUSION_FRAMEWORK)
 
 
 def query_ollama(prompt, model=DEFAULT_TEXT_MODEL, image_path=None, system_prompt=None, timeout=60):
@@ -185,13 +198,12 @@ def generate_full_episode_quiz(transcript, episode_id, num_questions=10):
     prompt = (
         f"Episode {episode_id} — Educational Content Transcript:\n"
         f"{transcript[:6000]}\n\n"
-        f"TASK: Generate exactly {num_questions} quiz questions with the following STRICT difficulty distribution:\n"
+        f"TASK: Generate exactly {num_questions} quiz questions. Focus on generating quickly.\n"
+        f"Difficulty distribution:\n"
         f"  - {easy_count} question(s) with difficulty: \"easy\"\n"
         f"  - {medium_count} question(s) with difficulty: \"medium\"\n"
         f"  - {hard_count} question(s) with difficulty: \"hard\"\n\n"
-        f"Apply ALL 10 stages of the Educational Assessment Engine to every question.\n"
-        f"Run the complete validation pipeline (Stages 7-10) before outputting.\n\n"
-        f"CRITICAL SPEED RULES:\n"
+        f"CRITICAL RULES:\n"
         f"1. DO NOT print any intermediate steps, reasoning, or evaluations.\n"
         f"2. DO NOT output any preamble or conversational text.\n"
         f"3. Directly output the FINAL JSON array immediately.\n\n"
