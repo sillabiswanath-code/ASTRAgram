@@ -91,7 +91,7 @@ RULES FOR OPTIONS: For MCQ types, the `options` array MUST contain exactly 4 per
 difficulty must be exactly one of: easy, medium, hard (lowercase).""".replace("{QUIZ_TEMPLATES}", QUIZ_TEMPLATES).replace("{CONFUSION_FRAMEWORK}", CONFUSION_FRAMEWORK)
 
 
-def query_ollama(prompt, model=DEFAULT_TEXT_MODEL, image_path=None, system_prompt=None, timeout=60):
+def query_ollama(prompt, model=DEFAULT_TEXT_MODEL, image_path=None, system_prompt=None, timeout=1800):
     """
     Query the local Ollama API.
     Gracefully returns an error object if Ollama is unreachable.
@@ -192,7 +192,7 @@ def generate_full_episode_quiz(transcript, episode_id, num_questions=10):
 
     print(f"[QuizEngine] Generating {num_questions} questions for Episode {episode_id} via Ollama ({QUIZ_MODEL})...", file=sys.stderr)
     # M1 fix: raised timeout from 180s to 300s — qwen2.5:3b-instruct with 10-stage prompt can exceed 3 min on slow hardware
-    res = query_ollama(prompt, model=QUIZ_MODEL, system_prompt=QUIZ_SYSTEM_PROMPT, timeout=300)
+    res = query_ollama(prompt, model=QUIZ_MODEL, system_prompt=QUIZ_SYSTEM_PROMPT, timeout=1800)
 
     if "error" in res:
         print(f"[QuizEngine] Ollama error: {res['error']}", file=sys.stderr)
