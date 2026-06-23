@@ -9,6 +9,8 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.LinkedBlockingQueue;
 
 @Service
 public class VideoProcessingService {
@@ -19,10 +21,52 @@ public class VideoProcessingService {
 
     private final ScheduledExecutorService monitorExecutor = Executors.newSingleThreadScheduledExecutor();
     private String ollamaStatus = "unknown";
+    
+    // Background queue fields
+    private final LinkedBlockingQueue<VideoJob> jobQueue = new LinkedBlockingQueue<>();
+    private final ExecutorService jobWorker = Executors.newSingleThreadExecutor();
+    private final ScheduledExecutorService queueReporter = Executors.newSingleThreadScheduledExecutor();
+
+    private static class VideoJob {
+        public final SseEmitter emitter;
+        public final Runnable task;
+        public VideoJob(SseEmitter emitter, Runnable task) {
+            this.emitter = emitter;
+            this.task = task;
+        }
+    }
 
     public VideoProcessingService() {
         // Delay first check by 10s to let Ollama (started by START_ASTRAGRAM.bat) settle
         monitorExecutor.scheduleAtFixedRate(this::checkAndRestartOllama, 10, 15, TimeUnit.SECONDS);
+        
+        // Start queue worker
+        jobWorker.submit(() -> {
+            while (true) {
+                try {
+                    VideoJob job = jobQueue.take();
+                    job.task.run();
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    break;
+                }
+            }
+        });
+
+        // Start queue position reporter
+        queueReporter.scheduleAtFixedRate(() -> {
+            int position = 1;
+            for (VideoJob job : jobQueue) {
+                try {
+                    job.emitter.send(SseEmitter.event()
+                        .name("progress")
+                        .data("2:Position #" + position + " in queue. Waiting for previous course to finish..."));
+                } catch (Exception e) {
+                    // Ignore, emitter might be closed
+                }
+                position++;
+            }
+        }, 5, 5, TimeUnit.SECONDS);
     }
 
     private void checkAndRestartOllama() {
@@ -184,7 +228,7 @@ public class VideoProcessingService {
             }
         }, 10, 10, TimeUnit.SECONDS);
 
-        new Thread(() -> {
+        Runnable processingTask = () -> {
             try {
                 LOGGER.info("Starting streaming video processing for: " + youtubeUrl);
 
@@ -253,8 +297,9 @@ public class VideoProcessingService {
                     emitter.completeWithError(ex);
                 }
             }
-        }).start();
+        };
 
+        jobQueue.offer(new VideoJob(emitter, processingTask));
         return emitter;
     }
 }
