@@ -590,6 +590,7 @@ def main():
         if metadata:
             metadata["status"] = "completed"
             metadata["final_summary"] = final_summary
+            metadata["segments"] = processed_segments
             storage_manager.save_metadata(folder_name, metadata)
             
         result = {
