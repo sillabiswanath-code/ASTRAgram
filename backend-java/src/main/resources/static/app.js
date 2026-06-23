@@ -1147,6 +1147,14 @@ function App() {
             .then(data => {
                 if (Array.isArray(data)) {
                     const patchedData = data.map(course => {
+                        // Normalize nested metadata
+                        if (!course.segments && course.course_init_data && course.course_init_data.segments) {
+                            course.segments = course.course_init_data.segments;
+                        }
+                        if (!course.course_title && course.course_init_data && course.course_init_data.course_title) {
+                            course.course_title = course.course_init_data.course_title;
+                        }
+
                         if (course.segments) {
                             course.segments = course.segments.map(seg => {
                                 let vUrl = seg.video_url;

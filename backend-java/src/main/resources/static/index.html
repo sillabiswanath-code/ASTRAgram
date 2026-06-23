@@ -31,8 +31,8 @@
     <!-- Main React App code written in pure JSX -->
     <script>
         // L6 fix: use a fixed version tag instead of Date.getTime()
-        // Change 'v=6' manually after deploying new app.js to bust cache
-        fetch('app.js?v=6')
+        // Change 'v=7' manually after deploying new app.js to bust cache
+        fetch('app.js?v=7')
             .then(res => {
                 if (!res.ok) throw new Error("HTTP error " + res.status);
                 return res.text();
