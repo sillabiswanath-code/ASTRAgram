@@ -13,7 +13,7 @@ set "BACKEND=%ROOT%backend-java"
 set "JAR=%BACKEND%\build\libs\backend-java-0.0.1-SNAPSHOT.jar"
 set "VENV_PYTHON=%BACKEND%\venv\Scripts\python.exe"
 set "PORT=8080"
-set "QUIZ_MODEL=llama3.1"
+set "QUIZ_MODEL=qwen2.5:3b-instruct"
 
 :BOOT
 cls
@@ -92,8 +92,8 @@ start /B /MIN "" cmd /c "set OLLAMA_NUM_PARALLEL=4 && "%OLLAMA_EXE%" serve > "%T
 ping 127.0.0.1 -n 5 >nul
 echo         Ollama running.
 
-:: Pull llama3.1 if missing
-"%OLLAMA_EXE%" list 2>nul | findstr /i "llama3.1" >nul 2>&1
+:: Pull model if missing
+"%OLLAMA_EXE%" list 2>nul | findstr /i "%QUIZ_MODEL%" >nul 2>&1
 if %errorlevel%==0 (
     echo         %QUIZ_MODEL% ready.
 ) else (

@@ -293,7 +293,7 @@ function CourseBuilder({ activeBuild, startBuild, uploadVideoAndBuild }) {
     );
 }
 
-function MyCoursesDashboard({ courses, setCurrentView, setCurrentCourseIndex }) {
+function MyCoursesDashboard({ courses, setCurrentView, setCurrentCourseIndex, onDeleteCourse }) {
     if (!courses || courses.length === 0) {
         return (
             <div className="page-container text-center">
@@ -322,8 +322,20 @@ function MyCoursesDashboard({ courses, setCurrentView, setCurrentCourseIndex }) 
                         onMouseOver={(e) => e.currentTarget.style.transform = 'translateY(-5px)'}
                         onMouseOut={(e) => e.currentTarget.style.transform = 'translateY(0)'}
                         >
-                            <div style={{ height: '140px', overflow: 'hidden' }}>
+                            <div style={{ position: 'relative', height: '140px', overflow: 'hidden' }}>
                                 <img src={thumbnailUrl} alt="Thumbnail" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                                {onDeleteCourse && (
+                                    <button 
+                                        onClick={(e) => {
+                                            e.stopPropagation();
+                                            onDeleteCourse(course.folder_name || course.course_title);
+                                        }}
+                                        style={{ position: 'absolute', top: '8px', right: '8px', background: 'rgba(220, 38, 38, 0.9)', color: 'white', border: 'none', borderRadius: '50%', width: '32px', height: '32px', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', zIndex: 10 }}
+                                        title="Delete Course"
+                                    >
+                                        <i className="fa-solid fa-trash" style={{ fontSize: '0.85rem' }}></i>
+                                    </button>
+                                )}
                             </div>
                             <div style={{ padding: '1.2rem' }}>
                                 <h3 style={{ fontSize: '1.1rem', marginBottom: '0.5rem', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
@@ -365,14 +377,13 @@ function CourseMap({ course, setCurrentView, setCurrentSegment, activeBuild }) {
                                     {seg.status === 'locked' ? <i className="fa-solid fa-lock" style={{ color: 'var(--text-muted)', marginRight: '8px' }}></i> : <i className="fa-solid fa-unlock" style={{ color: 'var(--primary)', marginRight: '8px' }}></i>}
                                     {seg.title}
                                 </h3>
-                                <p style={{ color: 'var(--text-muted)' }}>Phase {idx + 1} - 3 Minute Video & Quiz</p>
                             </div>
                             {seg.status !== 'locked' ? (
                                 <button className="btn btn-primary" onClick={() => {
                                     setCurrentSegment(seg);
                                     setCurrentView('segment');
                                 }}>
-                                    Start Segment <i className="fa-solid fa-arrow-right" style={{ marginLeft: '8px' }}></i>
+                                    Play <i className="fa-solid fa-play" style={{ marginLeft: '8px' }}></i>
                                 </button>
                             ) : isProcessing ? (
                                 <span style={{ color: 'var(--primary)', fontWeight: 'bold', fontSize: '0.9rem' }}>
@@ -417,7 +428,6 @@ function CourseMap({ course, setCurrentView, setCurrentSegment, activeBuild }) {
 
 function SegmentViewer({ segment, courseIndex, setCurrentView, setCourses }) {
     const [activeTab, setActiveTab] = useState('video');
-    const [unlockedTabs, setUnlockedTabs] = useState({ video: true, read: false, quiz: false });
     const [isBuffering, setIsBuffering] = useState(false);
     const [bufferMsg, setBufferMsg] = useState('');
     const videoRef = React.useRef(null);
@@ -432,12 +442,57 @@ function SegmentViewer({ segment, courseIndex, setCurrentView, setCourses }) {
     const questions = React.useMemo(() => {
         const q = segment.quiz;
         if (!q) return [];
-        if (Array.isArray(q.questions) && q.questions.length > 0) return q.questions;
-        if (q.question && q.options && q.answer) {
-            return [{ type: 'single_mcq', question: q.question, options: q.options, answer: q.answer, difficulty: 'medium' }];
+        let rawQ = [];
+        if (Array.isArray(q.questions) && q.questions.length > 0) {
+            rawQ = q.questions;
+        } else if (q.question && q.options && q.answer) {
+            rawQ = [{ type: 'single_mcq', question: q.question, options: q.options, answer: q.answer, difficulty: 'medium' }];
         }
-        return [];
+
+        const clone = JSON.parse(JSON.stringify(rawQ));
+        
+        // Shuffle questions
+        for (let i = clone.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1));
+            [clone[i], clone[j]] = [clone[j], clone[i]];
+        }
+
+        // Shuffle options and pairs
+        clone.forEach(question => {
+            if (question.options && Array.isArray(question.options)) {
+                for (let i = question.options.length - 1; i > 0; i--) {
+                    const j = Math.floor(Math.random() * (i + 1));
+                    [question.options[i], question.options[j]] = [question.options[j], question.options[i]];
+                }
+            }
+            if (question.pairs && Array.isArray(question.pairs)) {
+                for (let i = question.pairs.length - 1; i > 0; i--) {
+                    const j = Math.floor(Math.random() * (i + 1));
+                    [question.pairs[i], question.pairs[j]] = [question.pairs[j], question.pairs[i]];
+                }
+            }
+        });
+
+        return clone;
     }, [segment.quiz]);
+
+    // Detect if this is an Ollama-offline placeholder quiz (not a real quiz)
+    const isPlaceholderQuiz = React.useMemo(() => {
+        const q = segment.quiz;
+        if (!q) return false;
+        if (q.ollama_used === false) return true;
+        if (Array.isArray(q.questions) && q.questions.length === 1) {
+            const firstQ = q.questions[0];
+            if (firstQ && typeof firstQ.question === 'string' &&
+                firstQ.question.includes('Ollama')) return true;
+        }
+        return false;
+    }, [segment.quiz]);
+
+    // Quiz tab is unlocked immediately for placeholder quizzes (nothing to lock behind)
+    // Otherwise it unlocks after watching >= 90% of the video
+    const [quizManuallyUnlocked, setQuizManuallyUnlocked] = useState(isPlaceholderQuiz);
+    const quizUnlocked = quizManuallyUnlocked;
 
     const currentQ  = questions[quizIndex] || {};
     const qType = currentQ.type || 'single_mcq';
@@ -456,10 +511,35 @@ function SegmentViewer({ segment, courseIndex, setCurrentView, setCourses }) {
         if (qType === 'single_mcq') {
             isCorrect = selected === currentQ.answer;
         } else if (qType === 'multiple_mcq') {
-            isCorrect = selected.length === currentQ.answer.length && 
-                        selected.every(s => currentQ.answer.includes(s));
+            const isAllOfThese = (s) => typeof s === 'string' && (s.toLowerCase().includes("all of these") || s.toLowerCase().includes("all of the above"));
+            
+            const selectedClean = selected.filter(s => !isAllOfThese(s));
+            const answerClean = currentQ.answer.filter(s => !isAllOfThese(s));
+            
+            const hasAllSelected = selected.some(isAllOfThese);
+            const hasAllAnswered = currentQ.answer.some(isAllOfThese);
+            
+            const totalOtherOptions = currentQ.options.filter(o => !isAllOfThese(o)).length;
+
+            if (hasAllSelected || hasAllAnswered) {
+                const aiMeansAll = hasAllAnswered || answerClean.length === totalOtherOptions;
+                const userMeansAll = hasAllSelected || selectedClean.length === totalOtherOptions;
+                
+                if (aiMeansAll && userMeansAll) {
+                    isCorrect = true;
+                } else if (aiMeansAll && !userMeansAll) {
+                    isCorrect = false;
+                } else if (!aiMeansAll && userMeansAll) {
+                    isCorrect = false;
+                } else {
+                    isCorrect = selectedClean.length === answerClean.length && selectedClean.every(s => answerClean.includes(s));
+                }
+            } else {
+                isCorrect = Array.isArray(selected) && selected.length === currentQ.answer.length && 
+                            selected.every(s => currentQ.answer.includes(s));
+            }
         } else if (qType === 'match_following') {
-            isCorrect = currentQ.pairs.every(p => selected[p.left] === p.right);
+            isCorrect = currentQ.pairs.every(p => selected && selected[p.left] === p.right);
         }
     }
 
@@ -469,8 +549,17 @@ function SegmentViewer({ segment, courseIndex, setCurrentView, setCourses }) {
         hard:   { label: 'HARD',   color: '#dc2626', bg: '#fee2e2' },
     };
 
+    // Unlock quiz when video reaches 90% — more reliable than onEnded
+    const handleVideoTimeUpdate = () => {
+        if (quizManuallyUnlocked) return;
+        const vid = videoRef.current;
+        if (vid && vid.duration > 0 && (vid.currentTime / vid.duration) >= 0.90) {
+            setQuizManuallyUnlocked(true);
+        }
+    };
+
     const handleVideoEnd = () => {
-        setUnlockedTabs(prev => ({ ...prev, quiz: true }));
+        setQuizManuallyUnlocked(true);
         setActiveTab('quiz');
     };
 
@@ -614,9 +703,9 @@ function SegmentViewer({ segment, courseIndex, setCurrentView, setCourses }) {
                         <i className="fa-solid fa-play" style={{ marginRight: '8px' }}></i> Watch Video
                     </button>
                     <button className={`tab-btn ${activeTab === 'quiz' ? 'active' : ''}`}
-                        onClick={() => unlockedTabs.quiz && setActiveTab('quiz')}
-                        disabled={!unlockedTabs.quiz}>
-                        {unlockedTabs.quiz
+                        onClick={() => quizUnlocked && setActiveTab('quiz')}
+                        disabled={!quizUnlocked}>
+                        {quizUnlocked
                             ? <i className="fa-solid fa-clipboard-question" style={{ marginRight: '8px' }}></i>
                             : <i className="fa-solid fa-lock" style={{ marginRight: '8px' }}></i>}
                         Quiz {totalQ > 0 && `(${totalQ} Questions)`}
@@ -636,14 +725,15 @@ function SegmentViewer({ segment, courseIndex, setCurrentView, setCourses }) {
                                 <video ref={videoRef} className="video-player" controls preload="auto" src={segment.video_url}
                                     onWaiting={() => { setIsBuffering(true); setBufferMsg('Buffering...'); }}
                                     onPlaying={() => setIsBuffering(false)}
+                                    onTimeUpdate={handleVideoTimeUpdate}
                                     onEnded={handleVideoEnd}
                                     style={{ display: 'block', width: '100%' }}>
                                     Your browser does not support the video tag.
                                 </video>
                             </div>
-                            {!unlockedTabs.quiz && (
+                            {!quizUnlocked && (
                                 <p style={{ textAlign: 'center', marginTop: '1rem', color: 'var(--text-muted)' }}>
-                                    Finish watching to unlock the Quiz 🔒
+                                    Watch 90% of the video to unlock the Quiz 🔒
                                 </p>
                             )}
                         </div>
@@ -651,7 +741,24 @@ function SegmentViewer({ segment, courseIndex, setCurrentView, setCourses }) {
 
                     {activeTab === 'quiz' && (
                         <div>
-                            {totalQ === 0 ? (
+                            {isPlaceholderQuiz ? (
+                                <div style={{ padding: '2rem', textAlign: 'center', backgroundColor: '#fff7ed', borderRadius: '0.75rem', border: '2px solid #f97316' }}>
+                                    <i className="fa-solid fa-triangle-exclamation" style={{ fontSize: '2.5rem', color: '#ea580c', marginBottom: '1rem', display: 'block' }}></i>
+                                    <h3 style={{ color: '#c2410c', marginBottom: '0.75rem' }}>Quiz Not Available — Ollama Was Offline</h3>
+                                    <p style={{ color: '#9a3412', marginBottom: '1.5rem', lineHeight: '1.6' }}>
+                                        This episode's quiz could not be generated because Ollama (qwen2.5:3b-instruct) was not running when the video was processed.
+                                    </p>
+                                    <div style={{ backgroundColor: '#ffedd5', padding: '1rem', borderRadius: '0.5rem', textAlign: 'left', marginBottom: '1.5rem' }}>
+                                        <p style={{ fontWeight: '600', color: '#9a3412', marginBottom: '0.5rem' }}>To fix this:</p>
+                                        <ol style={{ color: '#9a3412', paddingLeft: '1.25rem', lineHeight: '2' }}>
+                                            <li>Open a terminal and run: <code style={{ background: '#fef3c7', padding: '2px 6px', borderRadius: '4px' }}>ollama serve</code></li>
+                                            <li>Then run: <code style={{ background: '#fef3c7', padding: '2px 6px', borderRadius: '4px' }}>ollama pull qwen2.5:3b-instruct</code></li>
+                                            <li>Go back to Course Builder and rebuild this course</li>
+                                        </ol>
+                                    </div>
+                                    <button className="btn btn-primary" onClick={handleNextSegment}>Skip to Next Segment →</button>
+                                </div>
+                            ) : totalQ === 0 ? (
                                 <div style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-muted)' }}>
                                     No quiz available for this segment.
                                 </div>
@@ -676,7 +783,7 @@ function SegmentViewer({ segment, courseIndex, setCurrentView, setCourses }) {
                             ) : (
                                 <div>
                                     <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '1rem' }}>
-                                        <span style={{ fontWeight: 'bold' }}>Question {quizIndex + 1} of {totalQ}</span>
+                                        <span style={{ fontWeight: 'bold' }}>Q{quizIndex + 1} of Q{totalQ}</span>
                                         {currentQ?.difficulty && (
                                             <span style={{ 
                                                 fontSize: '0.8rem', padding: '0.2rem 0.6rem', borderRadius: '1rem', 
@@ -712,7 +819,7 @@ function SegmentViewer({ segment, courseIndex, setCurrentView, setCourses }) {
                                                         }}
                                                         onClick={() => handleOptionSelect(opt)} disabled={showResult}>
                                                         <div style={{ width: '30px', height: '30px', borderRadius: '50%', border: '1px solid currentColor', display: 'flex', alignItems: 'center', justifyContent: 'center', marginRight: '1rem' }}>
-                                                            {String.fromCharCode(65 + i)}
+                                                            {String.fromCharCode(97 + i)}
                                                         </div>
                                                         {opt}
                                                     </button>
@@ -961,10 +1068,32 @@ function CodeGraphAuth({ onUnlock }) {
     );
 }
 
-function SignIn({ setIsAuthenticated }) {
-    const handleLogin = (e) => {
+function SignIn({ onAuthSuccess }) {
+    const [email, setEmail] = useState('');
+    const [password, setPassword] = useState('');
+    const [error, setError] = useState('');
+    const [isRegistering, setIsRegistering] = useState(false);
+
+    const handleSubmit = async (e) => {
         e.preventDefault();
-        setIsAuthenticated(true);
+        setError('');
+        const endpoint = isRegistering ? '/api/auth/register' : '/api/auth/login';
+        
+        try {
+            const res = await fetch(endpoint, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(isRegistering ? { email, password, name: email.split('@')[0] } : { email, password })
+            });
+            const data = await res.json();
+            if (res.ok) {
+                onAuthSuccess(data);
+            } else {
+                setError(data.error || 'Authentication failed');
+            }
+        } catch (err) {
+            setError('Server connection failed');
+        }
     };
 
     return (
@@ -972,35 +1101,32 @@ function SignIn({ setIsAuthenticated }) {
             <div className="glass-card">
                 <div style={{ marginBottom: '2rem', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
                     <LogoMark size="large" variant="dark" />
-                    <p style={{ color: 'var(--text-muted)', marginTop: '1rem' }}>Welcome back! Please sign in to continue.</p>
+                    <p style={{ color: 'var(--text-muted)', marginTop: '1rem' }}>
+                        {isRegistering ? 'Create a new account.' : 'Welcome back! Please sign in to continue.'}
+                    </p>
                 </div>
 
-                <button className="oauth-btn oauth-google" onClick={handleLogin}>
-                    <i className="fa-brands fa-google" style={{ marginRight: '10px', fontSize: '1.2rem', color: '#DB4437' }}></i>
-                    Continue with Google
-                </button>
-                <button className="oauth-btn oauth-github" onClick={handleLogin}>
-                    <i className="fa-brands fa-github" style={{ marginRight: '10px', fontSize: '1.2rem' }}></i>
-                    Continue with GitHub
-                </button>
+                {error && <div style={{ color: 'red', marginBottom: '1rem', textAlign: 'center' }}>{error}</div>}
 
-                <div className="auth-divider">
-                    <span>OR</span>
-                </div>
-
-                <form onSubmit={handleLogin} style={{ textAlign: 'left' }}>
+                <form onSubmit={handleSubmit} style={{ textAlign: 'left' }}>
                     <div className="form-group">
                         <label className="form-label">Email Address</label>
-                        <input type="email" className="form-input" placeholder="you@example.com" required />
+                        <input type="email" className="form-input" placeholder="you@example.com" value={email} onChange={e => setEmail(e.target.value)} required />
                     </div>
                     <div className="form-group" style={{ marginBottom: '2rem' }}>
                         <label className="form-label">Password</label>
-                        <input type="password" className="form-input" placeholder="••••••••" required />
+                        <input type="password" className="form-input" placeholder="••••••••" value={password} onChange={e => setPassword(e.target.value)} required />
                     </div>
                     <button type="submit" className="btn btn-primary" style={{ width: '100%', fontSize: '1.1rem', padding: '0.85rem' }}>
-                        Sign In
+                        {isRegistering ? 'Sign Up' : 'Sign In'}
                     </button>
                 </form>
+                
+                <div style={{ marginTop: '1rem', textAlign: 'center' }}>
+                    <a href="#" onClick={(e) => { e.preventDefault(); setIsRegistering(!isRegistering); setError(''); }} style={{ color: 'var(--primary)', textDecoration: 'none' }}>
+                        {isRegistering ? 'Already have an account? Sign in' : 'Need an account? Sign up'}
+                    </a>
+                </div>
             </div>
         </div>
     );
@@ -1009,9 +1135,61 @@ function SignIn({ setIsAuthenticated }) {
 // --- Main App Setup ---
 
 function App() {
-    const [isAuthenticated, setIsAuthenticated] = useState(false);
+    const [currentUser, setCurrentUser] = useState(null);
+    const isAuthenticated = currentUser !== null;
     const [currentView, setCurrentView] = useState('home');
     const [courses, setCourses] = useState([]);
+
+    const fetchCourses = () => {
+        if (!currentUser) return;
+        fetch(`/api/course/list?userId=${currentUser.id}`)
+            .then(res => res.json())
+            .then(data => {
+                if (Array.isArray(data)) {
+                    const patchedData = data.map(course => {
+                        if (course.segments) {
+                            course.segments = course.segments.map(seg => {
+                                let vUrl = seg.video_url;
+                                let sUrl = seg.screenshot_url;
+                                
+                                if (vUrl && vUrl.startsWith('/api/course/download/') && vUrl.split('/').length === 6) {
+                                    const parts = vUrl.split('/');
+                                    vUrl = `/api/course/download/${currentUser.id}/${parts[4]}/${parts[5]}`;
+                                }
+                                if (sUrl && sUrl.startsWith('/api/course/download/') && sUrl.split('/').length === 6) {
+                                    const parts = sUrl.split('/');
+                                    sUrl = `/api/course/download/${currentUser.id}/${parts[4]}/${parts[5]}`;
+                                }
+                                return { ...seg, video_url: vUrl, screenshot_url: sUrl };
+                            });
+                        }
+                        return course;
+                    });
+                    setCourses(patchedData);
+                }
+            })
+            .catch(err => console.error("Error fetching courses", err));
+    };
+
+    useEffect(() => {
+        fetchCourses();
+    }, [currentUser]);
+
+    const handleDeleteCourse = async (folderName) => {
+        if (!confirm("Are you sure you want to delete this course? This action cannot be undone.")) return;
+        try {
+            const res = await fetch(`/api/course/delete?userId=${currentUser.id}&courseId=${folderName}`, { method: 'DELETE' });
+            if (res.ok) {
+                fetchCourses();
+            } else {
+                alert("Failed to delete course.");
+            }
+        } catch (err) {
+            console.error(err);
+            alert("Failed to delete course due to network error.");
+        }
+    };
+
     const [currentCourseIndex, setCurrentCourseIndex] = useState(null);
     const [currentSegment, setCurrentSegment] = useState(null);
     const [isGraphUnlocked, setIsGraphUnlocked] = useState(false);
@@ -1029,36 +1207,41 @@ function App() {
     });
 
     const [ollamaToast, setOllamaToast] = useState(null);
-    const prevStatusRef = React.useRef('starting');
+    // C1 fix: start as 'unknown' to match backend's initial ollamaStatus value
+    const prevStatusRef = React.useRef('unknown');
 
     useEffect(() => {
         let timeout;
+        let isMounted = true; // M6 fix: prevent orphaned fetch after unmount
         const pollOllama = async () => {
+            if (!isMounted) return;
             try {
                 const res = await fetch('/api/course/ollama-status');
                 const data = await res.json();
                 const status = data.status;
                 const prev = prevStatusRef.current;
-                
-                if (status === 'failed' && prev !== 'failed') {
-                    setOllamaToast({ message: 'Ai if failing to do the magic', type: 'error' });
+
+                // C3 fix: backend emits 'error' not 'failed'; 'restarting'/'restarted' not 'starting'
+                // C2+L1 fix: typo corrected, 'Ai' → 'AI'
+                if (status === 'error' && prev !== 'error') {
+                    setOllamaToast({ message: 'AI engine encountered an error — attempting restart...', type: 'error' });
+                    setTimeout(() => setOllamaToast(null), 5000);
+                } else if ((status === 'running' || status === 'restarted') && (prev === 'error' || prev === 'restarting')) {
+                    setOllamaToast({ message: 'AI engine is back and ready!', type: 'success' });
                     setTimeout(() => setOllamaToast(null), 4000);
-                } else if ((status === 'starting' || status === 'restarted') && prev === 'failed') {
-                    setOllamaToast({ message: 'Ai is again ready to do the magic', type: 'success' });
-                    setTimeout(() => setOllamaToast(null), 4000);
-                } else if (status === 'running' && prev === 'starting') {
-                    setOllamaToast({ message: 'Ai is doing the magic', type: 'info' });
-                    setTimeout(() => setOllamaToast(null), 4000);
+                } else if (status === 'running' && (prev === 'unknown' || prev === 'restarted')) {
+                    setOllamaToast({ message: 'AI engine is ready', type: 'info' });
+                    setTimeout(() => setOllamaToast(null), 3000);
                 }
-                
+
                 prevStatusRef.current = status;
             } catch (err) {
-                // ignore
+                // Server not reachable — ignore silently
             }
-            timeout = setTimeout(pollOllama, 5000);
+            if (isMounted) timeout = setTimeout(pollOllama, 5000);
         };
         pollOllama();
-        return () => clearTimeout(timeout);
+        return () => { isMounted = false; clearTimeout(timeout); };
     }, []);
 
     const uploadVideoAndBuild = async (file, fastMode, retryCount = 0) => {
@@ -1097,7 +1280,8 @@ function App() {
         
         setActiveBuild({ active: true, progress: 0, message: retryCount > 0 ? 'Auto-restarting processing...' : 'Initializing...', error: null, youtube_id: null });
         
-        const eventSource = new EventSource(`/api/course/stream-build?url=${encodeURIComponent(url)}&format=pdf&fastMode=${fastMode}`);
+        // L2 note: format=pdf is passed but currently inactive in processor.py (PDF gen is commented out)
+        const eventSource = new EventSource(`/api/course/stream-build?url=${encodeURIComponent(url)}&format=pdf&fastMode=${fastMode}&userId=${currentUser.id}`);
         let courseIdx = null;
         let specificErrorReceived = false;
 
@@ -1189,7 +1373,7 @@ function App() {
     }
 
     if (!isAuthenticated) {
-        return <SignIn setIsAuthenticated={setIsAuthenticated} />;
+        return <SignIn onAuthSuccess={(user) => setCurrentUser(user)} />;
     }
 
     const handleCodeGraphClick = () => {
@@ -1209,7 +1393,7 @@ function App() {
                 
                 {currentView === 'builder' && <CourseBuilder activeBuild={activeBuild} startBuild={startBuild} uploadVideoAndBuild={uploadVideoAndBuild} />}
                 
-                {currentView === 'my-courses' && <MyCoursesDashboard courses={courses} setCurrentView={setCurrentView} setCurrentCourseIndex={setCurrentCourseIndex} />}
+                {currentView === 'my-courses' && <MyCoursesDashboard courses={courses} setCurrentView={setCurrentView} setCurrentCourseIndex={setCurrentCourseIndex} onDeleteCourse={handleDeleteCourse} />}
                 
                 {currentView === 'course-map' && currentCourseIndex !== null && (
                     <CourseMap 

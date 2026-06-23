@@ -15,4 +15,4 @@ def pull_model(name):
     except Exception as e:
         print("Error pulling:", e)
 
-pull_model("llama3.1")
+pull_model("qwen2.5:3b-instruct")

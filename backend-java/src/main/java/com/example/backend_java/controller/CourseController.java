@@ -13,6 +13,7 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.nio.file.Files;
 import java.io.File;
 import java.util.Map;
 import org.springframework.web.multipart.MultipartFile;
@@ -33,7 +34,10 @@ public class CourseController {
     @PostMapping("/build-from-youtube")
     public ResponseEntity<?> buildCourse(@RequestBody BuildRequest request) {
         try {
-            String jsonOutput = videoProcessingService.processVideo(request.getYoutube_url(), request.getFormat(), request.isFastMode());
+            if (request.getUserId() == null || request.getUserId().isEmpty()) {
+                return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(Map.of("error", "UserId required"));
+            }
+            String jsonOutput = videoProcessingService.processVideo(request.getYoutube_url(), request.getFormat(), request.isFastMode(), request.getUserId());
             
             return ResponseEntity.ok()
                 .header(HttpHeaders.CONTENT_TYPE, MediaType.APPLICATION_JSON_VALUE)
@@ -46,8 +50,8 @@ public class CourseController {
     }
 
     @GetMapping(value = "/stream-build", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
-    public SseEmitter streamBuildCourse(@RequestParam String url, @RequestParam String format, @RequestParam boolean fastMode) {
-        return videoProcessingService.streamProcessVideo(url, format, fastMode);
+    public SseEmitter streamBuildCourse(@RequestParam String url, @RequestParam String format, @RequestParam boolean fastMode, @RequestParam String userId) {
+        return videoProcessingService.streamProcessVideo(url, format, fastMode, userId);
     }
 
     @PostMapping("/upload-video")
@@ -68,10 +72,10 @@ public class CourseController {
         return ResponseEntity.ok(Map.of("status", videoProcessingService.getOllamaStatus()));
     }
 
-    @GetMapping("/download/{videoId}/{fileName}")
-    public ResponseEntity<Resource> downloadFile(@PathVariable String videoId, @PathVariable String fileName) {
+    @GetMapping("/download/{userId}/{videoId}/{fileName}")
+    public ResponseEntity<Resource> downloadFile(@PathVariable String userId, @PathVariable String videoId, @PathVariable String fileName) {
         try {
-            Path filePath = Paths.get(STORAGE_DIR).resolve(videoId).resolve(fileName).normalize();
+            Path filePath = Paths.get("users").resolve(userId).resolve("storage").resolve(videoId).resolve(fileName).normalize();
             Resource resource = new UrlResource(filePath.toUri());
 
             if (resource.exists()) {
@@ -88,6 +92,50 @@ public class CourseController {
             }
         } catch (Exception ex) {
             return ResponseEntity.internalServerError().build();
+        }
+    }
+
+    @GetMapping("/list")
+    public ResponseEntity<?> listCourses(@RequestParam String userId) {
+        try {
+            File coursesDir = new File("users/" + userId + "/courses");
+            java.util.List<Map<String, Object>> courses = new java.util.ArrayList<>();
+            if (coursesDir.exists() && coursesDir.isDirectory()) {
+                com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+                for (File courseFolder : coursesDir.listFiles()) {
+                    if (courseFolder.isDirectory()) {
+                        File meta = new File(courseFolder, "metadata.json");
+                        if (meta.exists()) {
+                            try {
+                                Map<String, Object> metaData = mapper.readValue(meta, new com.fasterxml.jackson.core.type.TypeReference<Map<String, Object>>(){});
+                                courses.add(metaData);
+                            } catch (Exception ignored) {}
+                        }
+                    }
+                }
+            }
+            return ResponseEntity.ok(courses);
+        } catch (Exception e) {
+            return ResponseEntity.internalServerError().body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    @DeleteMapping("/delete")
+    public ResponseEntity<?> deleteCourse(@RequestParam String userId, @RequestParam String courseId) {
+        try {
+            Path coursePath = Paths.get("users").resolve(userId).resolve("courses").resolve(courseId).normalize();
+            Path storagePath = Paths.get("users").resolve(userId).resolve("storage").resolve(courseId).normalize();
+            
+            if (Files.exists(coursePath)) {
+                org.springframework.util.FileSystemUtils.deleteRecursively(coursePath);
+            }
+            if (Files.exists(storagePath)) {
+                org.springframework.util.FileSystemUtils.deleteRecursively(storagePath);
+            }
+            
+            return ResponseEntity.ok(Map.of("success", true, "message", "Course deleted successfully."));
+        } catch (Exception e) {
+            return ResponseEntity.internalServerError().body(Map.of("error", e.getMessage()));
         }
     }
 }

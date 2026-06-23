@@ -8,3 +8,5 @@ sumy
 rake-nltk
 nltk
 torch
+# L7 fix: sentencepiece required by some Whisper/transformers tokenizer paths
+sentencepiece

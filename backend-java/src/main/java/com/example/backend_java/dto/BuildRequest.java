@@ -4,6 +4,10 @@ public class BuildRequest {
     private String youtube_url;
     private String format;
     private boolean fastMode;
+    private String userId;
+
+    public String getUserId() { return userId; }
+    public void setUserId(String userId) { this.userId = userId; }
 
     public String getYoutube_url() {
         return youtube_url;

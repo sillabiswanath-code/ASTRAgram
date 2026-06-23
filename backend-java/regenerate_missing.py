@@ -60,15 +60,32 @@ def generate_pdf(text, title, output_path):
         print(f"Warning: PDF generation failed: {e}", file=sys.stderr)
 
 def main():
+    # M11 fix: accept CLI args instead of hardcoded dev paths
+    # Usage: python regenerate_missing.py <course_folder_name> [seg_id1 seg_id2 ...]
+    if len(sys.argv) < 2:
+        print("Usage: python regenerate_missing.py <course_folder_name> [seg_id1 seg_id2 ...]")
+        print("Example: python regenerate_missing.py IOQM-2026-Achievers-Batch 1 3 5")
+        sys.exit(1)
+
+    course_folder = sys.argv[1]
+    # Parse optional segment IDs; default to [1] if not given
+    try:
+        seg_ids = [int(x) for x in sys.argv[2:]] if len(sys.argv) > 2 else [1]
+    except ValueError:
+        print("Error: segment IDs must be integers")
+        sys.exit(1)
+
     # Use __file__ so path works regardless of where script is invoked from
     base_dir = os.path.dirname(os.path.abspath(__file__))
     storage_dir = os.path.join(base_dir, "storage")
-    # Default to first found course dir, or override below
-    course_dir = os.path.join(storage_dir, "IOQM-2026-Achievers-Batch")
+    course_dir = os.path.join(storage_dir, course_folder)
     if not os.path.exists(course_dir):
         print(f"Course directory not found: {course_dir}")
+        print(f"Available courses: {os.listdir(storage_dir) if os.path.exists(storage_dir) else 'storage/ not found'}")
         return
 
+    print(f"Processing course: {course_dir}")
+    print(f"Segment IDs to regenerate: {seg_ids}")
     print("Loading whisper pipeline...")
     try:
         from transformers import pipeline
@@ -77,7 +94,7 @@ def main():
         return
     whisper_pipe = pipeline("automatic-speech-recognition", model="openai/whisper-tiny", chunk_length_s=30, generate_kwargs={"task": "translate"})
 
-    for seg_id in [1, 11]:
+    for seg_id in seg_ids:
         pdf_path = os.path.join(course_dir, f"segment_{seg_id}.pdf")
         mp4_path = os.path.join(course_dir, f"segment_{seg_id}.mp4")
         wav_path = os.path.join(course_dir, f"segment_{seg_id}.wav")
@@ -97,7 +114,7 @@ def main():
         print(f"Transcript preview: {text[:100]}...")
 
         # 3. Generate PDF
-        title = f"Segment {seg_id} (0:00 - 3:00)" if seg_id == 1 else f"Segment {seg_id} (30:00+)"
+        title = f"Segment {seg_id}"
         generate_pdf(text, title, pdf_path)
 
         # 4. Clean up audio

@@ -18,16 +18,20 @@ public class VideoProcessingService {
     private static final File BASE_DIR = resolveBaseDir();
 
     private final ScheduledExecutorService monitorExecutor = Executors.newSingleThreadScheduledExecutor();
-    private String ollamaStatus = "starting";
+    private String ollamaStatus = "unknown";
 
     public VideoProcessingService() {
-        monitorExecutor.scheduleAtFixedRate(this::checkAndRestartOllama, 5, 5, TimeUnit.SECONDS);
+        // Delay first check by 10s to let Ollama (started by START_ASTRAGRAM.bat) settle
+        monitorExecutor.scheduleAtFixedRate(this::checkAndRestartOllama, 10, 15, TimeUnit.SECONDS);
     }
 
     private void checkAndRestartOllama() {
         try {
-            Process process = Runtime.getRuntime().exec("tasklist /FI \"IMAGENAME eq ollama.exe\" /NH");
-            BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()));
+            // Check if ollama.exe is in the process list
+            Process checkProcess = new ProcessBuilder("tasklist", "/FI", "IMAGENAME eq ollama.exe", "/NH")
+                .redirectErrorStream(true)
+                .start();
+            BufferedReader reader = new BufferedReader(new InputStreamReader(checkProcess.getInputStream()));
             String line;
             boolean isRunning = false;
             while ((line = reader.readLine()) != null) {
@@ -36,29 +40,48 @@ public class VideoProcessingService {
                     break;
                 }
             }
+            checkProcess.waitFor();
+
             if (!isRunning) {
-                if ("running".equals(ollamaStatus) || "restarted".equals(ollamaStatus)) {
-                    ollamaStatus = "failed"; // Marked as failed temporarily before restarting
-                }
+                // Always attempt restart regardless of previous status
+                ollamaStatus = "restarting";
                 LOGGER.info("Ollama is not running. Attempting to restart...");
-                
-                String ollamaExe = "ollama";
+
+                // Resolve ollama executable path
+                String ollamaExe = null;
                 String localAppData = System.getenv("LOCALAPPDATA");
-                if (localAppData != null && new File(localAppData, "Programs/Ollama/ollama.exe").exists()) {
-                    ollamaExe = new File(localAppData, "Programs/Ollama/ollama.exe").getAbsolutePath();
-                } else if (new File("C:/Program Files/Ollama/ollama.exe").exists()) {
-                    ollamaExe = "C:/Program Files/Ollama/ollama.exe";
+                if (localAppData != null) {
+                    File candidate = new File(localAppData, "Programs\\Ollama\\ollama.exe");
+                    if (candidate.exists()) ollamaExe = candidate.getAbsolutePath();
                 }
-                
-                ProcessBuilder pb = new ProcessBuilder("cmd", "/c", "start", "/B", "/MIN", "", ollamaExe, "serve");
+                if (ollamaExe == null) {
+                    File candidate = new File("C:\\Program Files\\Ollama\\ollama.exe");
+                    if (candidate.exists()) ollamaExe = candidate.getAbsolutePath();
+                }
+                if (ollamaExe == null) {
+                    ollamaExe = "ollama"; // Rely on PATH
+                }
+
+                LOGGER.info("Starting Ollama via: " + ollamaExe);
+
+                // Launch ollama serve directly — no cmd/start wrapper that can fail silently
+                // M5 fix: removed redundant redirectErrorStream(true) — inheritIO() overrides it
+                ProcessBuilder pb = new ProcessBuilder(ollamaExe, "serve");
+                pb.inheritIO();
                 pb.start();
-                Thread.sleep(2000); 
-                ollamaStatus = "restarted"; 
+
+                Thread.sleep(3000);
+                ollamaStatus = "restarted";
+                LOGGER.info("Ollama restart command issued.");
             } else {
+                if (!"running".equals(ollamaStatus)) {
+                    LOGGER.info("Ollama is running.");
+                }
                 ollamaStatus = "running";
             }
         } catch (Exception e) {
-            LOGGER.warning("Error checking Ollama status: " + e.getMessage());
+            LOGGER.warning("Error checking/restarting Ollama: " + e.getMessage());
+            ollamaStatus = "error";
         }
     }
 
@@ -77,7 +100,7 @@ public class VideoProcessingService {
         return new File(System.getProperty("user.dir")).getAbsoluteFile();
     }
 
-    public String processVideo(String youtubeUrl, String format, boolean fastMode) throws Exception {
+    public String processVideo(String youtubeUrl, String format, boolean fastMode, String userId) throws Exception {
         LOGGER.info("BASE_DIR resolved to: " + BASE_DIR.getAbsolutePath());
         LOGGER.info("Starting video processing for: " + youtubeUrl);
 
@@ -93,13 +116,25 @@ public class VideoProcessingService {
             scriptFile.getAbsolutePath(),
             youtubeUrl,
             format,
-            fastMode ? "true" : "false"
+            fastMode ? "true" : "false",
+            userId
         );
-        // Set working directory explicitly so storage/ and venv/ paths resolve correctly
         pb.directory(BASE_DIR);
-        // Capture stdout and stderr separately
         pb.redirectErrorStream(false);
         Process process = pb.start();
+
+        // C4 fix: drain stderr concurrently on a background thread to prevent deadlock.
+        // If stderr fills its OS pipe buffer while Java is blocked reading stdout,
+        // Python blocks writing stderr and Java blocks reading stdout — deadlock.
+        final StringBuilder stderr = new StringBuilder();
+        Thread stderrThread = new Thread(() -> {
+            try {
+                BufferedReader r = new BufferedReader(new InputStreamReader(process.getErrorStream()));
+                String ln;
+                while ((ln = r.readLine()) != null) stderr.append(ln).append("\n");
+            } catch (Exception ignored) {}
+        });
+        stderrThread.start();
 
         // Read stdout (JSON output from Python)
         BufferedReader stdoutReader = new BufferedReader(new InputStreamReader(process.getInputStream()));
@@ -109,14 +144,8 @@ public class VideoProcessingService {
             stdout.append(line).append("\n");
         }
 
-        // Read stderr (logs/warnings from Python)
-        BufferedReader stderrReader = new BufferedReader(new InputStreamReader(process.getErrorStream()));
-        StringBuilder stderr = new StringBuilder();
-        while ((line = stderrReader.readLine()) != null) {
-            stderr.append(line).append("\n");
-        }
-
         int exitCode = process.waitFor();
+        stderrThread.join(); // wait for stderr thread to finish
 
         if (stderr.length() > 0) {
             LOGGER.warning("Python stderr:\n" + stderr);
@@ -141,7 +170,7 @@ public class VideoProcessingService {
         return fullOutput.trim();
     }
 
-    public SseEmitter streamProcessVideo(String youtubeUrl, String format, boolean fastMode) {
+    public SseEmitter streamProcessVideo(String youtubeUrl, String format, boolean fastMode, String userId) {
         // Set timeout to 0 for infinite timeout since processing can take minutes
         SseEmitter emitter = new SseEmitter(0L);
         ScheduledExecutorService pingExecutor = Executors.newSingleThreadScheduledExecutor();
@@ -168,7 +197,8 @@ public class VideoProcessingService {
                     scriptFile.getAbsolutePath(),
                     youtubeUrl,
                     format,
-                    fastMode ? "true" : "false"
+                    fastMode ? "true" : "false",
+                    userId
                 );
                 pb.directory(BASE_DIR);
                 pb.redirectErrorStream(false);

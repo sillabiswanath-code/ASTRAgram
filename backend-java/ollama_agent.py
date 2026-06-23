@@ -7,12 +7,16 @@ import re
 import os
 
 OLLAMA_URL = "http://localhost:11434/api/generate"
-DEFAULT_TEXT_MODEL = "openhermes"
-DEFAULT_VISION_MODEL = "llava"
-QUIZ_MODEL = "llama3.1"
+# NOTE: qwen2.5:3b is used for all tasks
+DEFAULT_TEXT_MODEL = "qwen2.5:3b-instruct"
+DEFAULT_VISION_MODEL = "qwen2.5:3b-instruct"
+QUIZ_MODEL = "qwen2.5:3b-instruct"
+
+# M2 fix: use abspath so paths resolve correctly regardless of working directory
+_HERE = os.path.dirname(os.path.abspath(__file__))
 
 # Load Quiz Template Library
-template_path = os.path.join(os.path.dirname(__file__), "QUIZ_TEMPLATE_LIBRARY.md")
+template_path = os.path.join(_HERE, "QUIZ_TEMPLATE_LIBRARY.md")
 try:
     with open(template_path, "r", encoding="utf-8") as f:
         QUIZ_TEMPLATES = f.read()
@@ -21,7 +25,7 @@ except Exception as e:
     QUIZ_TEMPLATES = ""
 
 # Load Question Confusion Framework
-confusion_path = os.path.join(os.path.dirname(__file__), "Question_Confusion_Framework.md")
+confusion_path = os.path.join(_HERE, "Question_Confusion_Framework.md")
 try:
     with open(confusion_path, "r", encoding="utf-8") as f:
         CONFUSION_FRAMEWORK = f.read()
@@ -30,52 +34,16 @@ except Exception as e:
     CONFUSION_FRAMEWORK = ""
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# 10-STAGE EDUCATIONAL ASSESSMENT ENGINE — SYSTEM PROMPT
-# ═══════════════════════════════════════════════════════════════════════════════
-QUIZ_SYSTEM_PROMPT = """You are an Educational Assessment Engine.
+# Load Master System Prompt
+master_prompt_path = os.path.abspath(os.path.join(_HERE, "..", "ASTRAGRAM_MASTER_SYSTEM_PROMPT.md"))
+try:
+    with open(master_prompt_path, "r", encoding="utf-8") as f:
+        ASTRAGRAM_MASTER_SYSTEM_PROMPT = f.read()
+except Exception as e:
+    print(f"Warning: Could not load ASTRAGRAM_MASTER_SYSTEM_PROMPT.md: {e}", file=sys.stderr)
+    ASTRAGRAM_MASTER_SYSTEM_PROMPT = "You are an Educational Assessment Engine."
 
-Your primary objective is to generate high-quality quizzes from educational content while ensuring every question tests deep understanding rather than memorization.
-
-STAGE 1: CONTENT UNDERSTANDING
-Extract: Main topic, Subtopics, Definitions, Examples, Explanations, Analogies, Cause-effect relationships, Hidden assumptions, Practical applications.
-Create a Concept Map of all concepts. Identify explicitly and implicitly taught concepts.
-
-STAGE 2: STRICT DOMAIN RULES
-- Accuracy MUST be >99.9%. Absolutely no factual errors.
-- NEVER mention "the video", "the transcript", "the speaker", or "the platform".
-- Phrase all questions natively as if derived from an authoritative textbook.
-- Use your own combined knowledge to make distractors incredibly confusing and highly plausible.
-
-STAGE 3: QUESTION DESIGN RULES
-AVOID: "What is X?", "Define Y.", "Who invented Z?", "Which statement was mentioned?"
-REQUIRED: Application-based, Scenario-based, Indirect reasoning, Concept transfer, Cause-effect, Misconception detection, Concept comparison, Real-world interpretation.
-
-STAGE 4: CONFUSION ENGINE
-Each question MUST:
-- Require genuine thinking and reasoning.
-- Prevent lucky guessing.
-- Include highly plausible distractors.
-- Avoid obvious process of elimination.
-- Make the correct answer non-obvious at first glance.
-
-Difficulty distribution (STRICTLY follow the requested counts):
-- EASY: Surface-level application — student still needs to think, not just recall
-- MEDIUM: Requires connecting two or more concepts from the transcript
-- HARD: Requires deep inference, misconception navigation, or multi-step reasoning
-
-STAGE 5: OPTION GENERATION RULES
-Every wrong option MUST:
-- Be believable and conceptually related
-- Represent a real common misconception
-- Use similar wording/structure as the correct answer
-- Be plausible enough that a student who partially understood would pick it
-
-NEVER use: silly answers, joke answers, obviously wrong answers, answers of very different lengths.
-
-STAGE 6: TEMPLATE USAGE & CONFUSION FRAMEWORK
-You MUST use the provided templates from the Universal Quiz Template Library whenever possible. If none of the templates perfectly fit a highly specialized concept, only then may you create your own format.
-You MUST also follow the Question Confusion Framework rules to ensure the questions require deep thinking rather than direct recall.
-
+QUIZ_SYSTEM_PROMPT = ASTRAGRAM_MASTER_SYSTEM_PROMPT + "\n\n" + """
 === QUIZ TEMPLATE LIBRARY ===
 {QUIZ_TEMPLATES}
 =============================
@@ -83,19 +51,6 @@ You MUST also follow the Question Confusion Framework rules to ensure the questi
 === QUESTION CONFUSION FRAMEWORK ===
 {CONFUSION_FRAMEWORK}
 ====================================
-
-STAGE 7: QUALITY CHECK (run for every question)
-Q1. Accurate? Q2. Avoids words like 'video/transcript'? Q3. Confusing distractors?
-If ANY = NO → REGENERATE.
-
-STAGE 8: FINAL APPROVAL GATE
-Checklist before output:
-✓ Every question maps to episode concept ✓ No unrelated knowledge ✓ Questions are indirect
-✓ Require reasoning ✓ Distractors are confusing but fair ✓ No ambiguity ✓ No duplicates
-✓ No memorization-only questions ✓ All validation scores passed
-If all pass → OUTPUT. Else → RETURN TO STAGE 3.
-
-NON-NEGOTIABLE: Never output immediately. Always run: Generate → Validate → Score → Audit → Regenerate failures → Revalidate → Final Approval → Output.
 
 CRITICAL OUTPUT FORMAT:
 Respond ONLY with a valid JSON array. Absolutely NO markdown, NO backticks, NO explanation text, NO preamble.
@@ -145,6 +100,7 @@ def query_ollama(prompt, model=DEFAULT_TEXT_MODEL, image_path=None, system_promp
         "model": model,
         "prompt": prompt,
         "stream": False,
+        "keep_alive": -1,
         "options": {
             "temperature": 0.4
         }
@@ -235,7 +191,8 @@ def generate_full_episode_quiz(transcript, episode_id, num_questions=10):
     )
 
     print(f"[QuizEngine] Generating {num_questions} questions for Episode {episode_id} via Ollama ({QUIZ_MODEL})...", file=sys.stderr)
-    res = query_ollama(prompt, model=QUIZ_MODEL, system_prompt=QUIZ_SYSTEM_PROMPT, timeout=180)
+    # M1 fix: raised timeout from 180s to 300s — qwen2.5:3b-instruct with 10-stage prompt can exceed 3 min on slow hardware
+    res = query_ollama(prompt, model=QUIZ_MODEL, system_prompt=QUIZ_SYSTEM_PROMPT, timeout=300)
 
     if "error" in res:
         print(f"[QuizEngine] Ollama error: {res['error']}", file=sys.stderr)
@@ -259,6 +216,7 @@ def generate_full_episode_quiz(transcript, episode_id, num_questions=10):
 
     # Structural validation — processor.py is the authority on correctness
     valid = []
+    seen_questions = set()
     for q in questions:
         if not isinstance(q, dict) or "type" not in q or "question" not in q or "difficulty" not in q:
             print(f"[QuizEngine] Rejected malformed question (missing base fields): {str(q)[:200]}", file=sys.stderr)
@@ -296,11 +254,38 @@ def generate_full_episode_quiz(transcript, episode_id, num_questions=10):
                 is_valid = True
                 
         if is_valid and q["difficulty"] in ("easy", "medium", "hard"):
-            valid.append(q)
+            # Duplicate detector
+            q_norm = re.sub(r'[^a-zA-Z0-9]', '', q["question"].lower())
+            if q_norm not in seen_questions:
+                seen_questions.add(q_norm)
+                valid.append(q)
+            else:
+                print(f"[QuizEngine] Rejected duplicate question: {q['question'][:50]}", file=sys.stderr)
         else:
             print(f"[QuizEngine] Rejected malformed or duplicate-option question: {str(q)[:200]}", file=sys.stderr)
 
-    print(f"[QuizEngine] {len(valid)}/{len(questions)} questions passed structural validation.", file=sys.stderr)
+    print(f"[QuizEngine] {len(valid)}/{len(questions)} passed structural and duplicate validation.", file=sys.stderr)
+
+    # Fast batch AI Validation (Target < 2 sec)
+    if valid:
+        val_prompt = "Evaluate these questions for clarity, logical distractors, and one correct answer. Return a JSON array of the indices of VALID questions (e.g., [0, 1, 2]). Only return the JSON array.\n\n"
+        for idx, vq in enumerate(valid):
+            val_prompt += f"[{idx}] Q: {vq['question']} | Opts: {vq.get('options', [])} | Ans: {vq.get('answer', '')}\n"
+        
+        val_res = query_ollama(val_prompt, model=QUIZ_MODEL, system_prompt="You are a strict QA validator. Output ONLY a valid JSON array of integers representing the valid indices.")
+        if "error" not in val_res:
+            try:
+                raw_val = val_res["response"].strip()
+                raw_val = re.sub(r'```json\s*', '', raw_val)
+                raw_val = re.sub(r'```\s*', '', raw_val)
+                valid_indices = json.loads(raw_val)
+                if isinstance(valid_indices, list):
+                    filtered = [valid[i] for i in valid_indices if 0 <= i < len(valid)]
+                    print(f"[QuizEngine] AI Validator approved {len(filtered)}/{len(valid)} questions.", file=sys.stderr)
+                    valid = filtered
+            except Exception as e:
+                print(f"[QuizEngine] Validation parsing error: {e}, passing all structurally valid.", file=sys.stderr)
+
     return valid if valid else None
 
 

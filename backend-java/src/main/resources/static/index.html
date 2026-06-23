@@ -3,11 +3,14 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="ASTRAgram Learning OS — Transform any video into a structured course with AI-powered quizzes, summaries, and episode maps.">
+    <meta property="og:title" content="ASTRAgram | Learning OS">
+    <meta property="og:description" content="Turn any YouTube video or local video into a full interactive course with AI.">
     <title>ASTRAgram | Learning OS</title>
     
-    <!-- React & ReactDOM (Development versions via CDN) -->
-    <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
-    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <!-- React & ReactDOM (L5 fix: production builds — smaller, no dev warnings) -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
     
     <!-- Babel standalone for compiling JSX in the browser -->
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
@@ -15,6 +18,10 @@
     <!-- Font Awesome -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     
+    <!-- Google Fonts: Inter -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap">
+
     <!-- Custom CSS -->
     <link rel="stylesheet" href="styles.css">
 </head>
@@ -23,7 +30,9 @@
 
     <!-- Main React App code written in pure JSX -->
     <script>
-        fetch('app.js?v=' + new Date().getTime())
+        // L6 fix: use a fixed version tag instead of Date.getTime()
+        // Change 'v=6' manually after deploying new app.js to bust cache
+        fetch('app.js?v=6')
             .then(res => {
                 if (!res.ok) throw new Error("HTTP error " + res.status);
                 return res.text();
