@@ -38,6 +38,19 @@ def extract_video_id(url):
     match = re.search(r"(?:v=|\/)([0-9A-Za-z_-]{11}).*", url)
     return match.group(1) if match else None
 
+def is_valid_media_file(path, min_bytes=1000):
+    """Ensure cached files are not 0-byte corrupted stubs from previous crashed runs."""
+    if not os.path.exists(path):
+        return False
+    # If the file is smaller than min_bytes, it's a corrupted stub. Delete and rebuild.
+    if os.path.getsize(path) < min_bytes:
+        try:
+            os.remove(path)
+        except:
+            pass
+        return False
+    return True
+
 def generate_pdf(text, title, output_path):
     try:
         pdf = FPDF()
@@ -238,19 +251,40 @@ def generate_quiz_bank(text, episode_id, num_questions=10):
             print(f"[processor] Quiz bank ready: {len(validated)} questions for Episode {episode_id}", file=sys.stderr)
             return {"questions": validated, "ollama_used": True}
 
+    # If it failed, check if Ollama is actually dead or just struggling
+    test_res = ollama_agent.query_ollama("test", timeout=5)
+    if "error" in test_res:
+        print(f"PROGRESS:99:⚠️ Ollama crashed. Pausing for 60s to allow backend restart...", flush=True)
+        import time
+        for _ in range(12):
+            time.sleep(5)
+            test_res = ollama_agent.query_ollama("test", timeout=5)
+            if "error" not in test_res:
+                print(f"PROGRESS:99:✅ Ollama restarted successfully! Retrying quiz generation...", flush=True)
+                # Try one more time!
+                questions = ollama_agent.generate_full_episode_quiz(text, episode_id, num_questions)
+                if questions:
+                    # Quick validation skip for brevity since ollama_agent already does it
+                    return {"questions": questions, "ollama_used": True}
+                break # Still failed, but Ollama is up, so it's a generation failure
+        else:
+            # If the loop finishes without breaking, Ollama is permanently dead!
+            print(f"PROGRESS:99:❌ ERROR: Ollama is completely offline. Please click 'Restart Ollama' on the navigation bar, then click 'Build Course' again.", flush=True)
+            sys.exit(1)
+
     # ── 3. Ollama unavailable — return placeholder (not a quiz) ────────────
-    print(f"[processor] Ollama unavailable for Episode {episode_id}. Returning placeholder.", file=sys.stderr)
+    print(f"PROGRESS:99:⚠️ Quiz generation failed for Episode {episode_id}. You can regenerate later.", flush=True)
     return {
         "questions": [{
-            "question": "Ollama (qwen2.5:3b-instruct) is required to generate quiz questions. Please start Ollama and reprocess this video.",
+            "type": "single_mcq",
+            "difficulty": "easy",
+            "question": "Quiz Generation Failed",
             "options": [
-                "Start Ollama: run 'ollama serve' then 'ollama pull qwen2.5:3b-instruct'",
-                "Quiz generation is offline",
-                "AI quiz engine not available",
-                "Please restart with Ollama running"
+                "This episode's quiz could not be generated correctly. The AI may have struggled with the specific content of this segment, or the local Ollama service encountered an error.",
+                "The processing of your course is continuing normally.",
+                "You can try to regenerate this question using the 'Report Issue' button."
             ],
-            "answer": "Start Ollama: run 'ollama serve' then 'ollama pull qwen2.5:3b-instruct'",
-            "difficulty": "easy"
+            "answer": "This episode's quiz could not be generated correctly. The AI may have struggled with the specific content of this segment, or the local Ollama service encountered an error."
         }],
         "ollama_used": False
     }
@@ -296,16 +330,24 @@ def get_video_duration(video_path):
         return 360
 
 def main():
-    if len(sys.argv) < 3:
-        print(json.dumps({"error": "Missing arguments"}))
+    if len(sys.argv) < 2:
+        print(json.dumps({"error": "No YouTube URL provided"}))
         sys.exit(1)
         
-    video_input = sys.argv[1]
-    format_type = sys.argv[2]
-    fast_mode = sys.argv[3] == "true" if len(sys.argv) > 3 else False
-    user_id = sys.argv[4] if len(sys.argv) > 4 else "vedan123"
+    youtube_url = sys.argv[1]
+    format_type = sys.argv[2] if len(sys.argv) > 2 else "video"
+    fast_mode = (sys.argv[3].lower() == 'true') if len(sys.argv) > 3 else False
+    user_id = sys.argv[4] if len(sys.argv) > 4 else "default_user"
     
-    storage_manager.USER_ID = user_id
+    # Pre-flight check: Is Ollama alive?
+    print("PROGRESS:2:Verifying AI engine connection...", flush=True)
+    res = ollama_agent.query_ollama("test", timeout=10)
+    if "error" in res:
+        print("PROGRESS:2:❌ ERROR: Ollama is offline. Please click 'Restart Ollama' and try again.", flush=True)
+        sys.exit(1)
+
+    print("PROGRESS:5:Initializing processor...", flush=True)
+    video_input = youtube_url
     
     is_local_file = os.path.isfile(video_input)
     
@@ -392,7 +434,7 @@ def main():
         
         # Download Full Video
         full_video_path = f"{output_dir}/full_video.mp4"
-        if not os.path.exists(full_video_path):
+        if not is_valid_media_file(full_video_path, min_bytes=10000):
             if is_local_file:
                 print("PROGRESS:15:Copying local video...", flush=True)
                 import shutil
@@ -401,7 +443,8 @@ def main():
                 print("PROGRESS:15:Downloading full video...", flush=True)
                 ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
                 ydl_opts = {
-                    'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/mp4',
+                    'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best',
+                    'merge_output_format': 'mp4',
                     'outtmpl': full_video_path,
                     'quiet': True,
                     'noprogress': True,
@@ -411,13 +454,23 @@ def main():
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                     ydl.download([video_input])
 
+        # Ensure video_duration is 100% accurate before chunking
+        if os.path.exists(full_video_path):
+            actual_duration = get_video_duration(full_video_path)
+            if actual_duration > 0:
+                video_duration = actual_duration
+
         # Build Segment Timing Metadata
         if not needs_whisper:
             segments = build_topic_segments(transcript, video_duration)
-        else:
+            if not segments:
+                print("PROGRESS:25:YouTube transcript was empty or invalid, falling back to Whisper...", flush=True)
+                needs_whisper = True
+
+        if needs_whisper:
             # If we need whisper, we build segments based on the video duration
             chunk_duration = 180
-            total_chunks = math.ceil(video_duration / chunk_duration)
+            total_chunks = max(1, math.ceil(video_duration / chunk_duration))
             segments = []
             for i in range(1, total_chunks + 1):
                 start_time = (i - 1) * chunk_duration
@@ -462,12 +515,14 @@ def main():
         base_progress = 30
         progress_per_seg = 60 / max(1, total_segs)
         
+        course_summaries = []
+        
         for i, seg in enumerate(segments):
             seg_progress = base_progress + int(i * progress_per_seg)
             print(f"PROGRESS:{seg_progress}:Processing segment {i+1}/{total_segs}...", flush=True)
             # 1. Cut Video Chunk
             chunk_video_path = f"{output_dir}/segment_{seg['id']}.mp4"
-            if not os.path.exists(chunk_video_path):
+            if not is_valid_media_file(chunk_video_path, min_bytes=10000):
                 cut_video(full_video_path, seg["start_time"], seg["end_time"], chunk_video_path)
             
             # 2. Whisper Fallback
@@ -515,12 +570,13 @@ def main():
             sentences = [s.strip() for s in seg["text"].split('.') if len(s.strip()) > 5]
             draft_summary = ". ".join(sentences[:3]) + "." if sentences else "No summary available."
             
-            # M8 fix: only call Ollama if there is meaningful text (saves a pointless API call)
             if fast_mode or len(seg["text"].split()) < 20:
                 final_summary = draft_summary
             else:
                 summary_eval = ollama_agent.evaluate_and_rewrite_summary(seg["text"], draft_summary)
                 final_summary = summary_eval["summary"]
+            
+            course_summaries.append(f"Episode {seg['id']} Summary:\n{final_summary}")
             
             # The PDF code is kept aside (not actively writing the file anymore per user request)
             # material_path = f"{output_dir}/segment_{seg['id']}.pdf"
@@ -528,7 +584,8 @@ def main():
             
             # 5. Extract Screenshot & Generate/Validate Dynamic Quiz
             screenshot_path = f"{output_dir}/segment_{seg['id']}.jpg"
-            extract_screenshot(chunk_video_path, screenshot_path)
+            if not is_valid_media_file(screenshot_path, min_bytes=500):
+                extract_screenshot(chunk_video_path, screenshot_path)
             
             # ── Quiz generation: Ollama-only ────────────────────────────────
             cached_quiz = storage_manager.load_quiz(folder_name, seg["id"])
@@ -564,21 +621,22 @@ def main():
             print(f"SEGMENT_DONE:{json.dumps(processed_segments[-1])}", flush=True)
             
         print("PROGRESS:95:Finalizing your course and generating summary...", flush=True)
-        # Generate full bullet-point summary
-        full_text = " ".join([s.get("text", "") for s in segments])[:10000]
+        # Generate full bullet-point summary using a Summary Memory approach (sliding context of summaries)
+        full_text = "\n\n".join(course_summaries)[:30000] # Safe margin, summarizes the summaries!
         final_summary = "Failed to generate summary."
         try:
             prompt_query = (
                 f"Topic/Title: {video_title}\n\n"
                 f"Task: Generate exactly 5 to 7 'Important Points to Remember'.\n"
-                f"Instructions: Mix the insights from the provided transcript with your own expert, external knowledge regarding the topic '{video_title}'. "
-                f"Do not just summarize the transcript; enrich it with your deep knowledge on this subject. Make it highly accurate and insightful. "
-                f"Transcript:\n{full_text}"
+                f"Instructions: Mix the insights from the provided episode summaries with your own expert, external knowledge regarding the topic '{video_title}'. "
+                f"Do not just summarize the summaries; enrich it with your deep knowledge on this subject. Make it highly accurate and insightful. "
+                f"Episode Summaries:\n{full_text}"
             )
             sum_res = ollama_agent.query_ollama(
                 prompt_query, 
                 model=ollama_agent.QUIZ_MODEL, 
-                system_prompt="You are a strict educational expert. Output ONLY a concise bulleted list of the most critical points. No preamble, no conversational text."
+                system_prompt="You are a strict educational expert. Output ONLY a concise bulleted list of the most critical points. No preamble, no conversational text.",
+                num_ctx=32000
             )
             if "error" not in sum_res:
                 final_summary = sum_res["response"]
@@ -602,6 +660,17 @@ def main():
         print(f"COURSE_DONE:{json.dumps(result)}", flush=True)
         
     except Exception as e:
+        import traceback
+        traceback.print_exc(file=sys.stderr)
+        try:
+            if 'folder_name' in locals():
+                metadata = storage_manager.load_metadata(folder_name)
+                if metadata:
+                    metadata["status"] = "failed"
+                    storage_manager.save_metadata(folder_name, metadata)
+        except Exception as meta_err:
+            print(f"Failed to update metadata on crash: {meta_err}", file=sys.stderr)
+            
         print(json.dumps({"error": f"Processing failed: {str(e)}"}))
         sys.exit(1)
 

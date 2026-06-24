@@ -66,17 +66,24 @@ function renderBoldText(text) {
     });
 }
 
-function Navbar({ currentView, setCurrentView }) {
+function Navbar({ currentView, setCurrentView, restartOllama, isRestarting }) {
     return (
         <header className="navbar">
             <div className="nav-brand" style={{ cursor: 'pointer' }} onClick={() => setCurrentView('home')}>
                 <LogoMark size="small" variant="dark" />
             </div>
             <nav className="nav-links">
+                <button 
+                    onClick={restartOllama} 
+                    disabled={isRestarting}
+                    style={{ background: '#3b82f6', color: 'white', border: 'none', cursor: 'pointer', padding: '0.5rem 1rem', borderRadius: '4px', fontWeight: 'bold' }}>
+                    <i className={`fa-solid ${isRestarting ? 'fa-spinner fa-spin' : 'fa-power-off'}`}></i> {isRestarting ? 'Restarting...' : 'Restart AI'}
+                </button>
                 <a href="#" className="nav-link" onClick={() => setCurrentView('home')}>Home</a>
                 <a href="#" className="nav-link" onClick={() => setCurrentView('my-courses')}>Courses</a>
                 <a href="#" className="nav-link">Blog</a>
                 <a href="#" className="nav-link">Contact</a>
+                <a href="mailto:support@astragram.com" className="nav-link" style={{ color: '#ef4444' }}><i className="fa-solid fa-flag"></i> Report an Issue</a>
             </nav>
             <button className="btn btn-primary" onClick={() => setCurrentView('builder')} style={{ cursor: 'pointer' }}>
                 Build Course
@@ -438,6 +445,7 @@ function SegmentViewer({ segment, courseIndex, setCurrentView, setCourses }) {
     const [showResult, setShowResult]     = useState(false);
     const [quizComplete, setQuizComplete] = useState(false);
     const [draggedItem, setDraggedItem]   = useState(null); // For matching questions
+    const [isReporting, setIsReporting]   = useState(false);
 
     const questions = React.useMemo(() => {
         const q = segment.quiz;
@@ -656,6 +664,52 @@ function SegmentViewer({ segment, courseIndex, setCurrentView, setCourses }) {
         setQuizComplete(false);
     };
 
+    const handleReportQuestion = async () => {
+        if (!confirm("Are you sure you want to report this question? It will be regenerated and replaced.")) return;
+        setIsReporting(true);
+        try {
+            const urlParts = segment.video_url.split('/');
+            const userId = urlParts[4];
+            const courseId = urlParts[5];
+            
+            const res = await fetch('/api/course/report-quiz-question', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    userId: userId,
+                    courseId: courseId,
+                    segmentId: segment.id,
+                    questionIndex: quizIndex
+                })
+            });
+            const data = await res.json();
+            if (data.success) {
+                // Update local segment state
+                setCourses(prev => {
+                    const newCourses = [...prev];
+                    const course = { ...newCourses[courseIndex] };
+                    const newSegments = [...course.segments];
+                    const currentSegIdx = newSegments.findIndex(s => s.id === segment.id);
+                    if (currentSegIdx !== -1) {
+                        newSegments[currentSegIdx] = { ...newSegments[currentSegIdx], quiz: data.quiz };
+                    }
+                    course.segments = newSegments;
+                    newCourses[courseIndex] = course;
+                    return newCourses;
+                });
+                alert("Question has been regenerated.");
+                setAnswers({});
+                setShowResult(false);
+            } else {
+                alert("Failed to report question: " + data.error);
+            }
+        } catch (e) {
+            alert("Error reporting question: " + e.message);
+        } finally {
+            setIsReporting(false);
+        }
+    };
+
     const handleNextSegment = () => {
         setCourses(prev => {
             const newCourses = [...prev];
@@ -784,16 +838,25 @@ function SegmentViewer({ segment, courseIndex, setCurrentView, setCourses }) {
                                 <div>
                                     <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '1rem' }}>
                                         <span style={{ fontWeight: 'bold' }}>Q{quizIndex + 1} of Q{totalQ}</span>
-                                        {currentQ?.difficulty && (
-                                            <span style={{ 
-                                                fontSize: '0.8rem', padding: '0.2rem 0.6rem', borderRadius: '1rem', 
-                                                backgroundColor: difficultyConfig[currentQ.difficulty]?.bg || '#f1f5f9',
-                                                color: difficultyConfig[currentQ.difficulty]?.color || '#475569',
-                                                fontWeight: 'bold' 
-                                            }}>
-                                                {difficultyConfig[currentQ.difficulty]?.label || currentQ.difficulty.toUpperCase()}
-                                            </span>
-                                        )}
+                                        <div style={{ display: 'flex', gap: '10px' }}>
+                                            <button 
+                                                onClick={handleReportQuestion} 
+                                                disabled={isReporting}
+                                                style={{ border: 'none', background: 'none', color: '#ef4444', cursor: 'pointer', fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: '5px' }}
+                                                title="Report and Regenerate Question">
+                                                <i className={`fa-solid ${isReporting ? 'fa-spinner fa-spin' : 'fa-flag'}`}></i> {isReporting ? 'Regenerating...' : 'Report Issue'}
+                                            </button>
+                                            {currentQ?.difficulty && (
+                                                <span style={{ 
+                                                    fontSize: '0.8rem', padding: '0.2rem 0.6rem', borderRadius: '1rem', 
+                                                    backgroundColor: difficultyConfig[currentQ.difficulty]?.bg || '#f1f5f9',
+                                                    color: difficultyConfig[currentQ.difficulty]?.color || '#475569',
+                                                    fontWeight: 'bold' 
+                                                }}>
+                                                    {difficultyConfig[currentQ.difficulty]?.label || currentQ.difficulty.toUpperCase()}
+                                                </span>
+                                            )}
+                                        </div>
                                     </div>
                                     <h2 style={{ fontSize: '1.5rem', marginBottom: '2rem' }}>{currentQ?.question}</h2>
                                     
@@ -1205,6 +1268,25 @@ function App() {
         () => sessionStorage.getItem('splashPlayed') !== 'true'
     );
 
+    const [isRestartingOllama, setIsRestartingOllama] = useState(false);
+
+    const handleRestartOllama = async () => {
+        setIsRestartingOllama(true);
+        try {
+            const res = await fetch('/api/course/restart-ollama', { method: 'POST' });
+            const data = await res.json();
+            if (data.success) {
+                alert("Ollama restart command sent! It may take a few seconds to boot up.");
+            } else {
+                alert("Failed to restart Ollama: " + data.error);
+            }
+        } catch (e) {
+            alert("Error: " + e.message);
+        } finally {
+            setIsRestartingOllama(false);
+        }
+    };
+
     // Global background build state
     const [activeBuild, setActiveBuild] = useState({
         active: false,
@@ -1296,10 +1378,19 @@ function App() {
         eventSource.addEventListener('course_init', (e) => {
             const data = JSON.parse(e.data);
             setCourses(prev => {
-                const updated = [...prev, data];
-                courseIdx = updated.length - 1;
-                setCurrentCourseIndex(courseIdx);
-                return updated;
+                const existingIdx = prev.findIndex(c => c.youtube_id === data.youtube_id);
+                if (existingIdx !== -1) {
+                    const updated = [...prev];
+                    updated[existingIdx] = data;
+                    courseIdx = existingIdx;
+                    setCurrentCourseIndex(courseIdx);
+                    return updated;
+                } else {
+                    const updated = [...prev, data];
+                    courseIdx = updated.length - 1;
+                    setCurrentCourseIndex(courseIdx);
+                    return updated;
+                }
             });
             setActiveBuild(prev => ({ ...prev, youtube_id: data.youtube_id, message: 'Extracting content...' }));
             setCurrentView('course-map');
@@ -1394,7 +1485,7 @@ function App() {
 
     return (
         <div className="app-container" style={{ flexDirection: 'column' }}>
-            <Navbar currentView={currentView} setCurrentView={setCurrentView} />
+            <Navbar currentView={currentView} setCurrentView={setCurrentView} restartOllama={handleRestartOllama} isRestarting={isRestartingOllama} />
             <main style={{ flex: 1 }}>
                 
                 {currentView === 'home' && <Home setCurrentView={setCurrentView} />}

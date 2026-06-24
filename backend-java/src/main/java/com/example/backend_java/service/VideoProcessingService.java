@@ -69,7 +69,7 @@ public class VideoProcessingService {
         }, 5, 5, TimeUnit.SECONDS);
     }
 
-    private void checkAndRestartOllama() {
+    public void checkAndRestartOllama() {
         try {
             // Check if ollama.exe is in the process list
             Process checkProcess = new ProcessBuilder("tasklist", "/FI", "IMAGENAME eq ollama.exe", "/NH")
@@ -248,9 +248,32 @@ public class VideoProcessingService {
                 pb.redirectErrorStream(false);
                 Process process = pb.start();
 
+                Runnable cleanupProcess = () -> {
+                    if (process != null && process.isAlive()) {
+                        LOGGER.warning("Terminating background python process due to SSE disconnect or timeout.");
+                        process.destroy();
+                    }
+                    pingExecutor.shutdown();
+                };
+
+                emitter.onCompletion(cleanupProcess);
+                emitter.onTimeout(cleanupProcess);
+                emitter.onError((e) -> cleanupProcess.run());
+
                 BufferedReader stdoutReader = new BufferedReader(new InputStreamReader(process.getInputStream()));
                 StringBuilder jsonOutput = new StringBuilder();
                 String line;
+
+                // Asynchronous stderr draining to prevent deadlock
+                final StringBuilder stderr = new StringBuilder();
+                Thread stderrThread = new Thread(() -> {
+                    try {
+                        BufferedReader r = new BufferedReader(new InputStreamReader(process.getErrorStream()));
+                        String ln;
+                        while ((ln = r.readLine()) != null) stderr.append(ln).append("\n");
+                    } catch (Exception ignored) {}
+                });
+                stderrThread.start();
 
                 while ((line = stdoutReader.readLine()) != null) {
                     if (line.startsWith("PROGRESS:")) {
@@ -267,14 +290,8 @@ public class VideoProcessingService {
                     }
                 }
 
-                // Read stderr
-                BufferedReader stderrReader = new BufferedReader(new InputStreamReader(process.getErrorStream()));
-                StringBuilder stderr = new StringBuilder();
-                while ((line = stderrReader.readLine()) != null) {
-                    stderr.append(line).append("\n");
-                }
-
                 int exitCode = process.waitFor();
+                stderrThread.join(); // wait for stderr to finish
                 pingExecutor.shutdown();
 
                 if (stderr.length() > 0) {

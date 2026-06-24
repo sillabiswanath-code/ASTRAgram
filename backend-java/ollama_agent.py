@@ -91,7 +91,39 @@ RULES FOR OPTIONS: For MCQ types, the `options` array MUST contain exactly 4 per
 difficulty must be exactly one of: easy, medium, hard (lowercase).""".replace("{QUIZ_TEMPLATES}", QUIZ_TEMPLATES).replace("{CONFUSION_FRAMEWORK}", CONFUSION_FRAMEWORK)
 
 
-def query_ollama(prompt, model=DEFAULT_TEXT_MODEL, image_path=None, system_prompt=None, timeout=1800):
+def extract_json_array(text):
+    """Robustly extracts a JSON array from a string, ignoring conversational preamble."""
+    # Strip markdown code fences
+    text = re.sub(r'```json\s*', '', text)
+    text = re.sub(r'```\s*', '', text)
+    text = text.strip()
+    
+    try:
+        start = text.index('[')
+        end = text.rindex(']') + 1
+        arr = json.loads(text[start:end])
+        if isinstance(arr, list):
+            return arr
+    except (ValueError, json.JSONDecodeError):
+        pass
+        
+    # Fallback for chatty LLMs
+    try:
+        # Search for array of objects (quiz questions)
+        match_objects = re.search(r'\[\s*\{.*?\}\s*\]', text, re.DOTALL)
+        if match_objects:
+            return json.loads(match_objects.group(0))
+            
+        # Search for array of integers (validation indices)
+        match_ints = re.search(r'\[\s*\d+(?:\s*,\s*\d+)*\s*\]', text, re.DOTALL)
+        if match_ints:
+            return json.loads(match_ints.group(0))
+    except:
+        pass
+        
+    return None
+
+def query_ollama(prompt, model=DEFAULT_TEXT_MODEL, image_path=None, system_prompt=None, timeout=1800, num_ctx=None):
     """
     Query the local Ollama API.
     Gracefully returns an error object if Ollama is unreachable.
@@ -105,6 +137,9 @@ def query_ollama(prompt, model=DEFAULT_TEXT_MODEL, image_path=None, system_promp
             "temperature": 0.4
         }
     }
+
+    if num_ctx is not None:
+        payload["options"]["num_ctx"] = num_ctx
 
     if system_prompt:
         payload["system"] = system_prompt
@@ -191,102 +226,87 @@ def generate_full_episode_quiz(transcript, episode_id, num_questions=10):
     )
 
     print(f"[QuizEngine] Generating {num_questions} questions for Episode {episode_id} via Ollama ({QUIZ_MODEL})...", file=sys.stderr)
-    # M1 fix: raised timeout from 180s to 300s — qwen2.5:3b-instruct with 10-stage prompt can exceed 3 min on slow hardware
-    res = query_ollama(prompt, model=QUIZ_MODEL, system_prompt=QUIZ_SYSTEM_PROMPT, timeout=1800)
+    
+    max_retries = 2
+    for attempt in range(max_retries):
+        res = query_ollama(prompt, model=QUIZ_MODEL, system_prompt=QUIZ_SYSTEM_PROMPT, timeout=1800)
 
-    if "error" in res:
-        print(f"[QuizEngine] Ollama error: {res['error']}", file=sys.stderr)
-        return None
+        if "error" in res:
+            print(f"[QuizEngine] Ollama error: {res['error']}", file=sys.stderr)
+            return None # Connection error, don't retry
 
-    raw = res["response"].strip()
+        raw = res["response"].strip()
 
-    # Strip markdown code fences if present
-    raw = re.sub(r'```json\s*', '', raw)
-    raw = re.sub(r'```\s*', '', raw)
-    raw = raw.strip()
+        questions = extract_json_array(raw)
+        if not questions:
+            print(f"[QuizEngine] JSON parse error on attempt {attempt+1}. Raw (first 500): {raw[:500]}", file=sys.stderr)
+            continue # Retry
 
-    # Extract outermost JSON array
-    try:
-        start = raw.index('[')
-        end   = raw.rindex(']') + 1
-        questions = json.loads(raw[start:end])
-    except (ValueError, json.JSONDecodeError) as e:
-        print(f"[QuizEngine] JSON parse error: {e}\nRaw (first 500): {raw[:500]}", file=sys.stderr)
-        return None
-
-    # Structural validation — processor.py is the authority on correctness
-    valid = []
-    seen_questions = set()
-    for q in questions:
-        if not isinstance(q, dict) or "type" not in q or "question" not in q or "difficulty" not in q:
-            print(f"[QuizEngine] Rejected malformed question (missing base fields): {str(q)[:200]}", file=sys.stderr)
-            continue
-            
-        q_type = q["type"]
-        is_valid = False
-        
-        if q_type == "single_mcq":
-            if (
-                "options" in q and "answer" in q
-                and isinstance(q["options"], list)
-                and len(q["options"]) == 4
-                and len(set(q["options"])) == 4  # No duplicates
-                and isinstance(q["answer"], str)
-                and q["answer"] in q["options"]
-            ):
-                is_valid = True
-        elif q_type == "multiple_mcq":
-            if (
-                "options" in q and "answer" in q
-                and isinstance(q["options"], list)
-                and len(q["options"]) == 4
-                and len(set(q["options"])) == 4  # No duplicates
-                and isinstance(q["answer"], list)
-                and all(a in q["options"] for a in q["answer"])
-            ):
-                is_valid = True
-        elif q_type == "match_following":
-            if (
-                "pairs" in q
-                and isinstance(q["pairs"], list)
-                and all(isinstance(p, dict) and "left" in p and "right" in p for p in q["pairs"])
-            ):
-                is_valid = True
+        # Structural validation — processor.py is the authority on correctness
+        valid = []
+        seen_questions = set()
+        for q in questions:
+            if not isinstance(q, dict) or "type" not in q or "question" not in q or "difficulty" not in q:
+                continue
                 
-        if is_valid and q["difficulty"] in ("easy", "medium", "hard"):
-            # Duplicate detector
-            q_norm = re.sub(r'[^a-zA-Z0-9]', '', q["question"].lower())
-            if q_norm not in seen_questions:
-                seen_questions.add(q_norm)
-                valid.append(q)
-            else:
-                print(f"[QuizEngine] Rejected duplicate question: {q['question'][:50]}", file=sys.stderr)
-        else:
-            print(f"[QuizEngine] Rejected malformed or duplicate-option question: {str(q)[:200]}", file=sys.stderr)
+            q_type = q["type"]
+            is_valid = False
+            
+            if q_type == "single_mcq":
+                if (
+                    "options" in q and "answer" in q
+                    and isinstance(q["options"], list)
+                    and len(q["options"]) == 4
+                    and len(set(q["options"])) == 4  # No duplicates
+                    and isinstance(q["answer"], str)
+                    and q["answer"] in q["options"]
+                ):
+                    is_valid = True
+            elif q_type == "multiple_mcq":
+                if (
+                    "options" in q and "answer" in q
+                    and isinstance(q["options"], list)
+                    and len(q["options"]) == 4
+                    and len(set(q["options"])) == 4  # No duplicates
+                    and isinstance(q["answer"], list)
+                    and all(a in q["options"] for a in q["answer"])
+                ):
+                    is_valid = True
+            elif q_type == "match_following":
+                if (
+                    "pairs" in q
+                    and isinstance(q["pairs"], list)
+                    and all(isinstance(p, dict) and "left" in p and "right" in p for p in q["pairs"])
+                ):
+                    is_valid = True
+                    
+            if is_valid and q["difficulty"] in ("easy", "medium", "hard"):
+                # Duplicate detector
+                q_norm = re.sub(r'[^a-zA-Z0-9]', '', q["question"].lower())
+                if q_norm not in seen_questions:
+                    seen_questions.add(q_norm)
+                    valid.append(q)
 
-    print(f"[QuizEngine] {len(valid)}/{len(questions)} passed structural and duplicate validation.", file=sys.stderr)
+        print(f"[QuizEngine] Attempt {attempt+1}: {len(valid)}/{len(questions)} passed structural and duplicate validation.", file=sys.stderr)
 
-    # Fast batch AI Validation (Target < 2 sec)
-    if valid:
-        val_prompt = "Evaluate these questions for clarity, logical distractors, and one correct answer. Return a JSON array of the indices of VALID questions (e.g., [0, 1, 2]). Only return the JSON array.\n\n"
-        for idx, vq in enumerate(valid):
-            val_prompt += f"[{idx}] Q: {vq['question']} | Opts: {vq.get('options', [])} | Ans: {vq.get('answer', '')}\n"
-        
-        val_res = query_ollama(val_prompt, model=QUIZ_MODEL, system_prompt="You are a strict QA validator. Output ONLY a valid JSON array of integers representing the valid indices.")
-        if "error" not in val_res:
-            try:
+        # Fast batch AI Validation (Target < 2 sec)
+        if valid:
+            val_prompt = "Evaluate these questions for clarity, logical distractors, and one correct answer. Return a JSON array of the indices of VALID questions (e.g., [0, 1, 2]). Only return the JSON array.\n\n"
+            for idx, vq in enumerate(valid):
+                val_prompt += f"[{idx}] Q: {vq['question']} | Opts: {vq.get('options', [])} | Ans: {vq.get('answer', '')}\n"
+            
+            val_res = query_ollama(val_prompt, model=QUIZ_MODEL, system_prompt="You are a strict QA validator. Output ONLY a valid JSON array of integers representing the valid indices.")
+            if "error" not in val_res:
                 raw_val = val_res["response"].strip()
-                raw_val = re.sub(r'```json\s*', '', raw_val)
-                raw_val = re.sub(r'```\s*', '', raw_val)
-                valid_indices = json.loads(raw_val)
+                valid_indices = extract_json_array(raw_val)
                 if isinstance(valid_indices, list):
-                    filtered = [valid[i] for i in valid_indices if 0 <= i < len(valid)]
-                    print(f"[QuizEngine] AI Validator approved {len(filtered)}/{len(valid)} questions.", file=sys.stderr)
+                    filtered = [valid[i] for i in valid_indices if isinstance(i, int) and 0 <= i < len(valid)]
                     valid = filtered
-            except Exception as e:
-                print(f"[QuizEngine] Validation parsing error: {e}, passing all structurally valid.", file=sys.stderr)
 
-    return valid if valid else None
+        if valid:
+            return valid # Success!
+            
+    return None # All retries failed
 
 
 def validate_quiz_with_vision(quiz_json, screenshot_path):

@@ -82,6 +82,7 @@ public class CourseController {
                 String contentType = "application/octet-stream";
                 if (fileName.endsWith(".mp4")) contentType = "video/mp4";
                 else if (fileName.endsWith(".pdf")) contentType = "application/pdf";
+                else if (fileName.endsWith(".jpg") || fileName.endsWith(".jpeg")) contentType = "image/jpeg";
                 
                 return ResponseEntity.ok()
                         .contentType(MediaType.parseMediaType(contentType))
@@ -134,6 +135,69 @@ public class CourseController {
             }
             
             return ResponseEntity.ok(Map.of("success", true, "message", "Course deleted successfully."));
+        } catch (Exception e) {
+            return ResponseEntity.internalServerError().body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    @PostMapping("/report-quiz-question")
+    public ResponseEntity<?> reportQuizQuestion(@RequestBody Map<String, Object> payload) {
+        try {
+            String userId = (String) payload.get("userId");
+            String courseId = (String) payload.get("courseId");
+            String segmentId = String.valueOf(payload.get("segmentId"));
+            String questionIndex = String.valueOf(payload.get("questionIndex"));
+
+            File baseDir = new File("processor.py").getAbsoluteFile().getParentFile();
+            if (baseDir == null || !new File(baseDir, "processor.py").exists()) {
+                baseDir = new File(System.getProperty("user.dir")).getAbsoluteFile();
+            }
+
+            File venvPython = new File(baseDir, "venv/Scripts/python.exe");
+            String pythonExe = venvPython.exists() ? venvPython.getAbsolutePath() : "python";
+            File scriptFile = new File(baseDir, "report_quiz_question.py");
+
+            ProcessBuilder pb = new ProcessBuilder(
+                pythonExe,
+                scriptFile.getAbsolutePath(),
+                userId,
+                courseId,
+                segmentId,
+                questionIndex
+            );
+            pb.directory(baseDir);
+            pb.redirectErrorStream(false);
+            Process process = pb.start();
+            
+            // Asynchronously drain stderr to prevent OS pipe deadlocks
+            new Thread(() -> {
+                try {
+                    java.io.BufferedReader r = new java.io.BufferedReader(new java.io.InputStreamReader(process.getErrorStream()));
+                    while (r.readLine() != null) {}
+                } catch (Exception ignored) {}
+            }).start();
+            
+            java.io.BufferedReader stdoutReader = new java.io.BufferedReader(new java.io.InputStreamReader(process.getInputStream()));
+            StringBuilder stdout = new StringBuilder();
+            String line;
+            while ((line = stdoutReader.readLine()) != null) {
+                stdout.append(line).append("\n");
+            }
+            process.waitFor();
+
+            return ResponseEntity.ok()
+                .header(HttpHeaders.CONTENT_TYPE, MediaType.APPLICATION_JSON_VALUE)
+                .body(stdout.toString());
+        } catch (Exception e) {
+            return ResponseEntity.internalServerError().body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    @PostMapping("/restart-ollama")
+    public ResponseEntity<?> restartOllama() {
+        try {
+            videoProcessingService.checkAndRestartOllama();
+            return ResponseEntity.ok(Map.of("success", true, "message", "Ollama restart triggered."));
         } catch (Exception e) {
             return ResponseEntity.internalServerError().body(Map.of("error", e.getMessage()));
         }

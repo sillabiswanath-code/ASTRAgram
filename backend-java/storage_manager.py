@@ -20,8 +20,11 @@ def save_metadata(course_id, metadata):
 def load_metadata(course_id):
     path = os.path.join(get_course_dir(course_id), "metadata.json")
     if os.path.exists(path):
-        with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except (json.JSONDecodeError, ValueError):
+            pass
     return None
 
 def save_course(course_id, title, summary):
@@ -59,12 +62,28 @@ def save_quiz(course_id, ep_id, quiz_json):
     # Save as Markdown for readable format
     md_content = f"# Quiz for Episode {ep_id}\n\n"
     questions = quiz_json.get("questions", [])
+    
+    # If it's a placeholder quiz (Ollama offline), or empty
+    if not questions:
+        md_content += "_No questions generated._\n"
+    
     for i, q in enumerate(questions):
         md_content += f"## Q{i+1}: {q.get('question', '')}\n"
-        if "options" in q:
-            for opt in q["options"]:
-                md_content += f"- {opt}\n"
-        md_content += f"\n**Answer:** {q.get('answer', '')}\n\n"
+        
+        q_type = q.get("type", "single_mcq")
+        if q_type == "single_mcq" or q_type == "multiple_mcq":
+            if "options" in q:
+                for opt in q["options"]:
+                    md_content += f"- {opt}\n"
+            ans = q.get('answer', '')
+            if isinstance(ans, list):
+                ans = ", ".join(ans)
+            md_content += f"\n**Answer:** {ans}\n\n"
+        elif q_type == "match_following":
+            md_content += "**Options to Match:**\n"
+            for p in q.get("pairs", []):
+                md_content += f"- {p.get('left')} -> {p.get('right')}\n"
+            md_content += "\n"
 
     with open(os.path.join(course_dir, f"episode_{ep_id}_quiz.md"), "w", encoding="utf-8") as f:
         f.write(md_content)
@@ -72,6 +91,9 @@ def save_quiz(course_id, ep_id, quiz_json):
 def load_quiz(course_id, ep_id):
     path = os.path.join(get_course_dir(course_id), f"episode_{ep_id}_quiz.json")
     if os.path.exists(path):
-        with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except (json.JSONDecodeError, ValueError):
+            pass
     return None
